@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 import geopandas as gpd
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))  # Add project root to sys.path
 
 from scripts.config import (
     CRS_CANADA_ALBERS,
