@@ -114,18 +114,19 @@ def find_canue_dmti_sli_csv(year: int = 2021) -> Path:
     return csv
 
 
-def find_landcover_gdb() -> Path:
-    """
-    Find the ESRI File Geodatabase folder under data_raw/landcover/.
-    Expected: LCC2020.gdb (folder)
-    """
-    gdb = _first_match(LANDCOVER_DIR, ["*.gdb"])
-    if not gdb or not gdb.is_dir():
+def find_landcover_raster() -> Path:
+    land_dir = DATA_RAW / "landcover"
+    tifs = list(land_dir.glob("*.tif"))
+
+    if not tifs:
         raise FileNotFoundError(
-            f"Could not find a .gdb folder in {LANDCOVER_DIR}. "
-            "Copy the entire LCC2020.gdb folder into data_raw/landcover/."
+            f"No landcover GeoTIFF found in {land_dir}. "
+            "Export LCC2020 as GeoTIFF (.tif) from QGIS."
         )
-    return gdb
+
+    return tifs[0]
+
+
 
 
 # -------------------------
@@ -138,8 +139,7 @@ class Inputs:
     census_csv: Path
     canue_wtlst_csv: Path
     canue_dmti_csv: Path
-    landcover_gdb: Path
-
+    landcover_raster: Path
 
 def get_inputs() -> Inputs:
     """Resolve and return all required input paths."""
@@ -148,7 +148,7 @@ def get_inputs() -> Inputs:
         census_csv=find_census_profile_csv(),
         canue_wtlst_csv=find_canue_wtlst_csv(EXPOSURE_YEAR),
         canue_dmti_csv=find_canue_dmti_sli_csv(EXPOSURE_YEAR),
-        landcover_gdb=find_landcover_gdb(),
+        landcover_raster=find_landcover_raster(),
     )
 
 
@@ -163,5 +163,5 @@ if __name__ == "__main__":
     print("Census CSV:", ins.census_csv)
     print("CANUE WTLST:", ins.canue_wtlst_csv)
     print("CANUE DMTI:", ins.canue_dmti_csv)
-    print("Landcover GDB:", ins.landcover_gdb)
+    print("Landcover raster:", ins.landcover_raster)
     print("Exposure:", EXPOSURE_YEAR, EXPOSURE_FIELD)

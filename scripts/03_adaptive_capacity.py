@@ -1,0 +1,186 @@
+# scripts/03_adaptive_capacity.py
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import geopandas as gpd
+import pandas as pd
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+from scripts.config import DATA_INTERMEDIATE, get_inputs  # noqa: E402
+
+
+# Option A (vegetation only)
+GREEN_CLASSES = {6, 7, 8, 9, 10}
+
+# In your raster, code 0 is very likely background/outside (treat as nodata)
+NODATA_VALUE = 0
+
+
+def normalize_01(s: pd.Series) -> pd.Series:
+    s = s.astype(float)
+    mn = s.min(skipna=True)
+    mx = s.max(skipna=True)
+    if pd.isna(mn) or pd.isna(mx) or mx == mn:
+        return pd.Series([pd.NA] * len(s), index=s.index, dtype="Float64")
+    return (s - mn) / (mx - mn)
+
+
+def main() -> int:
+    ins = get_inputs()
+
+    da_gpkg = DATA_INTERMEDIATE / "da.gpkg"
+    if not da_gpkg.exists():
+        print(f"ERROR: Missing {da_gpkg}. Run scripts/01_prepare_da.py first.")
+        return 1
+
+    land_tif = Path(ins.landcover_raster)
+    if not land_tif.exists():
+        print(f"ERROR: Landcover raster not found: {land_tif}")
+        return 1
+
+    print("=== 03_adaptive_capacity.py (raster landcover) ===")
+    print("DA base:", da_gpkg)
+    print("Landcover raster:", land_tif)
+    print("GREEN_CLASSES:", sorted(GREEN_CLASSES))
+    print("Assumed NODATA_VALUE:", NODATA_VALUE)
+
+    try:
+        import rasterio
+    except Exception as e:
+        print("ERROR: rasterio not available.")
+        print("Install with: conda install -c conda-forge rasterio")
+        print("Details:", repr(e))
+        return 1
+
+    try:
+        from rasterstats import zonal_stats  # type: ignore
+    except Exception as e:
+        print("ERROR: rasterstats not available.")
+        print("Install with: pip install rasterstats")
+        print("Details:", repr(e))
+        return 1
+
+    from shapely.geometry import box
+
+    # --- Load DAs ---
+    da = gpd.read_file(da_gpkg, layer="da")
+    if "DGUID" not in da.columns:
+        print("ERROR: DA layer missing DGUID.")
+        return 1
+    if da.crs is None:
+        print("ERROR: DA CRS missing in da.gpkg.")
+        return 1
+
+    # --- Open raster + get bounds/CRS/pixel area ---
+    with rasterio.open(land_tif) as src:
+        raster_crs = src.crs
+        if raster_crs is None:
+            print("ERROR: Raster CRS missing. Re-export from QGIS with CRS.")
+            return 1
+
+        px_w = abs(src.transform.a)
+        px_h = abs(src.transform.e)
+        pixel_area = px_w * px_h
+
+        bounds = src.bounds  # left, bottom, right, top
+        raster_bbox = box(bounds.left, bounds.bottom, bounds.right, bounds.top)
+
+    print("Raster CRS:", raster_crs)
+    print(f"Raster pixel: {px_w} x {px_h} => pixel_area={pixel_area}")
+    print("Raster bounds:", bounds)
+
+    # Reproject DA polygons to raster CRS (critical)
+    da = da.to_crs(raster_crs)
+
+    # Filter: keep only DAs that intersect raster bbox
+    before = len(da)
+    da = da[da.geometry.intersects(raster_bbox)].copy()
+    after = len(da)
+    print(f"Filtered DAs by raster extent: {before:,} -> {after:,}")
+
+    if after == 0:
+        print("ERROR: No DA polygons intersect the raster extent. CRS mismatch or wrong raster.")
+        return 1
+
+    da["da_area_m2"] = da.geometry.area
+
+    print("Computing zonal categorical counts (faster after filtering)...")
+
+    zs = zonal_stats(
+        da.geometry,
+        str(land_tif),
+        categorical=True,
+        nodata=NODATA_VALUE,     # IMPORTANT
+        all_touched=False,
+    )
+
+    out = pd.DataFrame({"DGUID": da["DGUID"].astype(str).values})
+    out["da_area_m2"] = da["da_area_m2"].astype(float).values
+
+    green_pixels = []
+    total_pixels = []
+
+    for d in zs:
+        if not isinstance(d, dict) or len(d) == 0:
+            green_pixels.append(pd.NA)
+            total_pixels.append(pd.NA)
+            continue
+
+        # sum all pixels except nodata (0)
+        tot = 0
+        for k, v in d.items():
+            try:
+                kk = int(k)
+            except Exception:
+                continue
+            if kk == NODATA_VALUE:
+                continue
+            tot += int(v)
+
+        g = 0
+        for code in GREEN_CLASSES:
+            g += int(d.get(code, 0))
+
+        green_pixels.append(g)
+        total_pixels.append(tot)
+
+    out["green_pixels"] = pd.Series(green_pixels, dtype="Float64")
+    out["total_pixels"] = pd.Series(total_pixels, dtype="Float64")
+
+    out["green_area_m2"] = out["green_pixels"] * float(pixel_area)
+    out["green_frac"] = out["green_area_m2"] / out["da_area_m2"]
+
+    out["adaptive_capacity_index"] = normalize_01(out["green_frac"])
+
+    out_csv = DATA_INTERMEDIATE / "adaptive_capacity.csv"
+    out.to_csv(out_csv, index=False)
+    print("Wrote:", out_csv)
+
+    report_path = DATA_INTERMEDIATE / "03_adaptive_capacity_debug_report.txt"
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("03_adaptive_capacity debug report\n")
+        f.write(f"Landcover raster: {land_tif}\n")
+        f.write(f"Raster CRS: {raster_crs}\n")
+        f.write(f"Pixel area: {pixel_area}\n")
+        f.write(f"NODATA_VALUE: {NODATA_VALUE}\n")
+        f.write(f"GREEN_CLASSES: {sorted(GREEN_CLASSES)}\n")
+        f.write(f"DAs used (after bbox filter): {len(out):,}\n\n")
+
+        f.write("Missingness:\n")
+        miss = out.isna().sum().sort_values(ascending=False)
+        for col, cnt in miss.items():
+            f.write(f"  {col}: {int(cnt):,}\n")
+
+        f.write("\nGreen fraction summary:\n")
+        gf = out["green_frac"].astype(float)
+        f.write(str(gf.describe(percentiles=[0.05, 0.25, 0.5, 0.75, 0.95])) + "\n")
+
+    print("Wrote:", report_path)
+    print("Done. Next: join adaptive_capacity.csv to da.gpkg (by DGUID) and visualize green_frac / adaptive_capacity_index.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
