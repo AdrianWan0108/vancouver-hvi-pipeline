@@ -50,31 +50,28 @@ The data pipeline is implemented as a sequence of Python scripts located in the 
 
   - 00_config.py
     - Centralized configuration for file paths, constants, and shared parameters.
-
   - 01_prepare_da.py
     - Loads and prepares DA boundary geometries and establishes the spatial base for all subsequent joins.
-
   - 02_census_sensitivity.py
     - Processes DA-level census variables and computes the Sensitivity Index.
-
   - 03_exposure_lst.py
     - Aggregates CANUE land surface temperature (LST) data and computes the Exposure Index.
-
   - 04_greenness_landcover.py
     - Processes land cover classification data and computes greenness-related indicators used for Adaptive Capacity.
-
   - 05_hvi_composite.py
     - Normalizes component indices, constructs the composite Heat Vulnerability Index, and exports the final DA-level GeoJSON.
 
 ## Local Data (not committed)
 
-Raw datasets should be placed locally in the following folders:
+Raw input datasets should be placed locally in the following directory structure:
 
+```
 data_raw/
-- da_boundaries/        (Dissemination Area boundaries – shapefile)
-- census_profile/       (Census variables at DA level – CSV)
-- canue_lst/             (CANUE postal-code LST datasets)
-- landcover/             (LCC2020 land cover – ESRI .gdb)
+├─ da_boundaries/        # Dissemination Area boundaries (shapefile)
+├─ census_profile/       # Census variables at DA level (CSV)
+├─ canue_lst/            # CANUE land surface temperature datasets
+└─ landcover/            # Land Cover Classification 2020 (ESRI .gdb)
+```
 
 These datasets are excluded from version control via `.gitignore`.
 
