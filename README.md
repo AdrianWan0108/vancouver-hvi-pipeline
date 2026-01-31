@@ -1,23 +1,70 @@
 # Vancouver Heat Vulnerability (HVI) – Data Pipeline
 
-This repository contains the data processing pipeline for the Vancouver Heat Vulnerability Index (HVI) project.
+This repository contains the **completed data processing pipeline** for the Vancouver Heat Vulnerability Index (HVI) project.
 
-The goal of this project is to process multiple raw datasets into a Dissemination Area (DA)–level GeoJSON that can be used directly by a MapLibre GL JS frontend.
+The purpose of this pipeline is to transform multiple raw spatial and tabular datasets into a **Dissemination Area (DA)–level geospatial dataset** suitable for interactive web mapping and analysis.
 
-At this stage, the repository contains project structure and environment setup only.
-Data processing scripts will be added incrementally.
+## Project Goal
 
-## Planned Output
+The goal of this project is to construct a **composite Heat Vulnerability Index (HVI)** for the Metro Vancouver region by integrating indicators related to:
 
-After the pipeline is implemented, the main output will be:
+  - Heat Exposure
+  - Sensitivity Adaptive Capacity
+  - Adaptive Capacity
 
-- data_out/da_hvi.geojson  
-  A DA-level GeoJSON containing:
-  - Heat Vulnerability Index (HVI)
-  - Exposure, Sensitivity, and Adaptive Capacity scores
-  - Indicator-level attributes for frontend display
+The resulting dataset is intended for use in an interactive MapLibre GL JS frontend as part of a broader web-based visualization tool.
 
-Output files are not committed to GitHub.
+## Current Output
+
+After executing the full pipeline, the primary output is:
+
+`data_out/da_hvi.geojson`
+
+This DA-level GeoJSON contains:
+
+  - Composite Heat Vulnerability Index (HVI)
+  - Component indices:
+    - Exposure
+    - Sensitivity
+    - Adaptive Capacity
+  - Selected indicator-level attributes used in index construction
+  - DA identifiers and geometries suitable for spatial joins and visualization
+
+⚠️ Output files are not committed to GitHub and are excluded via .gitignore.
+
+## Pipeline Overview
+
+The data pipeline is implemented as a sequence of Python scripts located in the scripts/ directory and executed in order.
+
+### Execution order:
+
+  ```
+  python scripts/01_prepare_da.py
+  python scripts/02_census_sensitivity.py
+  python scripts/03_exposure_lst.py
+  python scripts/04_greenness_landcover.py
+  python scripts/05_build_hvi.py
+  ```
+
+### Script Responsibilities
+
+  - 00_config.py
+    - Centralized configuration for file paths, constants, and shared parameters.
+
+  - 01_prepare_da.py
+    - Loads and prepares DA boundary geometries and establishes the spatial base for all subsequent joins.
+
+  - 02_census_sensitivity.py
+    - Processes DA-level census variables and computes the Sensitivity Index.
+
+  - 03_exposure_lst.py
+    - Aggregates CANUE land surface temperature (LST) data and computes the Exposure Index.
+
+  - 04_greenness_landcover.py
+    - Processes land cover classification data and computes greenness-related indicators used for Adaptive Capacity.
+
+  - 05_hvi_composite.py
+    - Normalizes component indices, constructs the composite Heat Vulnerability Index, and exports the final DA-level GeoJSON.
 
 ## Local Data (not committed)
 
@@ -29,38 +76,21 @@ data_raw/
 - canue_lst/             (CANUE postal-code LST datasets)
 - landcover/             (LCC2020 land cover – ESRI .gdb)
 
-These datasets are excluded from version control via .gitignore.
+These datasets are excluded from version control via `.gitignore`.
 
 ## Environment Setup
 
 This project uses Conda for environment management.
 
 Create the environment:
+```bash
 conda env create -f environment.yml
+```
 
 Activate the environment:
+```bash
 conda activate vancouver-hvi
-
-## Pipeline Design (planned)
-
-The data pipeline will be implemented as a sequence of Python scripts located in the scripts folder.
-
-Planned execution order (not yet implemented):
-
-python scripts/01_prepare_da.py
-python scripts/02_census_sensitivity.py
-python scripts/03_exposure_lst.py
-python scripts/04_greenness_landcover.py
-python scripts/05_build_hvi.py
-
-These scripts do not yet exist and are listed to document the intended workflow.
-
-## Repository Status
-
-- Project structure created
-- Conda environment configured
-- Data processing scripts pending
-- Final GeoJSON output pending
+```
 
 ## Notes
 
