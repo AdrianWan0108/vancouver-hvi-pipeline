@@ -9,3 +9,5 @@ data_out/
 .env
 .DS_Store
 Thumbs.db
+
+node_modules/

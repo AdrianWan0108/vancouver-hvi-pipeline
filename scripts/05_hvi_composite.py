@@ -1,5 +1,6 @@
 # scripts/05_hvi_composite.py
 from __future__ import annotations
+import json
 
 import sys
 from pathlib import Path
@@ -11,6 +12,11 @@ import pandas as pd
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from scripts.config import DATA_INTERMEDIATE, CRS_WGS84  # noqa: E402
+
+def print_bbox(gdf: gpd.GeoDataFrame, label: str) -> None:
+    """Print bbox in WGS84 to sanity-check geometry extent."""
+    b = gdf.total_bounds  # [minx, miny, maxx, maxy]
+    print(f"{label} bbox (WGS84): minx={b[0]:.4f}, miny={b[1]:.4f}, maxx={b[2]:.4f}, maxy={b[3]:.4f}")
 
 
 def normalize_01(s: pd.Series) -> pd.Series:
@@ -50,6 +56,22 @@ def main() -> int:
 
     # --- Base DA geometry ---
     da = gpd.read_file(da_gpkg, layer="da")
+
+    # --- Sanity check & optional geographic filter ---
+    # If your da.gpkg contains more than Metro Vancouver, Tippecanoe will be extremely slow.
+    # A robust filter is to clip by a bbox around Metro Vancouver in WGS84.
+    # (You can adjust these bounds if needed.)
+    da = da.to_crs(CRS_WGS84)
+    print_bbox(da, "DA layer (raw)")
+
+    METRO_VAN_BBOX = (-123.6, 49.0, -122.2, 49.6)  # (minx, miny, maxx, maxy)
+    minx, miny, maxx, maxy = METRO_VAN_BBOX
+    da = da.cx[minx:maxx, miny:maxy].copy()
+    print(f"DA count after Metro Vancouver bbox filter: {len(da):,}")
+    print_bbox(da, "DA layer (filtered)")
+
+
+
     if "DGUID" not in da.columns:
         print("ERROR: DA layer missing DGUID.")
         return 1
@@ -152,11 +174,15 @@ def main() -> int:
 
     gdf = out[keep_props + ["geometry"]].copy()
 
-    # Reproject to WGS84 for web maps
+    # Ensure CRS is WGS84 for web maps / tiling
     if gdf.crs is None:
-        # da.gpkg should already have CRS; but safety fallback
-        gdf = gdf.set_crs("EPSG:3347")
-    gdf = gdf.to_crs(CRS_WGS84)
+        # da.gpkg should already have CRS, but safety fallback
+        gdf = gdf.set_crs(CRS_WGS84)
+    else:
+        gdf = gdf.to_crs(CRS_WGS84)
+
+    print_bbox(gdf, "HVI output (WGS84)")
+
 
     # Optional simplification to reduce GeoJSON size
     # Adjust tolerance if needed: higher = smaller file, less detail
