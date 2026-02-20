@@ -40,7 +40,6 @@ EXACT_NAME_TO_KEY: Dict[str, str] = {
 
 # Seniors: we will sum these COUNT rows (not % rows)
 SENIORS_NAMES: Set[str] = {
-    "65 years and over",
     "65 to 74 years",
     "75 years and over",
 }
@@ -172,6 +171,21 @@ def main() -> int:
     # Convert numeric columns (after selection only, to keep it fast)
     df["C1_COUNT_TOTAL"] = to_num(df["C1_COUNT_TOTAL"])
     df["C10_RATE_TOTAL"] = to_num(df["C10_RATE_TOTAL"])
+    
+    # ---- Clean seniors rows: keep only true count-like rows ----
+    is_seniors = df["indicator_key"] == "seniors_65plus_count"
+
+    # drop rows where count is missing
+    df.loc[is_seniors & df["C1_COUNT_TOTAL"].isna(), "C1_COUNT_TOTAL"] = pd.NA
+
+    # drop suspicious rows where "count" equals "rate" (usually not real counts)
+    df.loc[
+        is_seniors
+        & df["C1_COUNT_TOTAL"].notna()
+        & df["C10_RATE_TOTAL"].notna()
+        & (df["C1_COUNT_TOTAL"] == df["C10_RATE_TOTAL"]),
+        "C1_COUNT_TOTAL"
+    ] = pd.NA
 
     # Debug: write extracted long slice
     out_long = DATA_INTERMEDIATE / "census_selected_long.csv"
@@ -196,6 +210,10 @@ def main() -> int:
     # Seniors (sum of matched age bins)
     seniors = df[df["indicator_key"] == "seniors_65plus_count"].groupby("DGUID")["C1_COUNT_TOTAL"].sum()
     wide["seniors_65plus_count"] = seniors
+
+    # Seniors sanity: cannot exceed population
+    wide.loc[wide["seniors_65plus_count"] > wide["pop_total"], "seniors_65plus_count"] = pd.NA
+    wide.loc[wide["seniors_65plus_count"] < 0, "seniors_65plus_count"] = pd.NA
 
     # Living alone count
     alone = df[df["indicator_key"] == "living_alone_count"].groupby("DGUID")["C1_COUNT_TOTAL"].first()
