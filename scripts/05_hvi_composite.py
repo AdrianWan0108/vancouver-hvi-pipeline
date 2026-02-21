@@ -1,6 +1,5 @@
 # scripts/05_hvi_composite.py
 from __future__ import annotations
-import json
 
 import sys
 from pathlib import Path
@@ -13,10 +12,14 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from scripts.config import DATA_INTERMEDIATE, CRS_WGS84  # noqa: E402
 
+
 def print_bbox(gdf: gpd.GeoDataFrame, label: str) -> None:
     """Print bbox in WGS84 to sanity-check geometry extent."""
     b = gdf.total_bounds  # [minx, miny, maxx, maxy]
-    print(f"{label} bbox (WGS84): minx={b[0]:.4f}, miny={b[1]:.4f}, maxx={b[2]:.4f}, maxy={b[3]:.4f}")
+    print(
+        f"{label} bbox (WGS84): "
+        f"minx={b[0]:.4f}, miny={b[1]:.4f}, maxx={b[2]:.4f}, maxy={b[3]:.4f}"
+    )
 
 
 def normalize_01(s: pd.Series) -> pd.Series:
@@ -54,31 +57,18 @@ def main() -> int:
     print("Adaptive:", adapt_csv)
     print("Exposure:", expo_csv)
 
-    # --- Base DA geometry ---
+    # --- Base DA geometry (already filtered to Metro Vancouver in script 01) ---
     da = gpd.read_file(da_gpkg, layer="da")
-
-    # --- Sanity check & optional geographic filter ---
-    # If your da.gpkg contains more than Metro Vancouver, Tippecanoe will be extremely slow.
-    # A robust filter is to clip by a bbox around Metro Vancouver in WGS84.
-    # (You can adjust these bounds if needed.)
-    da = da.to_crs(CRS_WGS84)
-    print_bbox(da, "DA layer (raw)")
-
-    METRO_VAN_BBOX = (-123.6, 49.0, -122.2, 49.6)  # (minx, miny, maxx, maxy)
-    minx, miny, maxx, maxy = METRO_VAN_BBOX
-    da = da.cx[minx:maxx, miny:maxy].copy()
-    print(f"DA count after Metro Vancouver bbox filter: {len(da):,}")
-    print_bbox(da, "DA layer (filtered)")
-
-
-
     if "DGUID" not in da.columns:
         print("ERROR: DA layer missing DGUID.")
         return 1
-    da["DGUID"] = da["DGUID"].astype(str)
 
-    base_cols = ["DGUID", "geometry"]
-    da = da[base_cols].copy()
+    da = da.to_crs(CRS_WGS84)
+    print(f"DA features: {len(da):,}")
+    print_bbox(da, "DA layer (WGS84)")
+
+    da["DGUID"] = da["DGUID"].astype(str)
+    da = da[["DGUID", "geometry"]].copy()
 
     # --- Load component tables ---
     sens = pd.read_csv(sens_csv, low_memory=False)
@@ -91,32 +81,66 @@ def main() -> int:
             return 1
         df["DGUID"] = df["DGUID"].astype(str)
 
-    # Pick the canonical columns we expect
-    # sensitivity.csv should contain sensitivity_index
-    if "sensitivity_index" not in sens.columns:
+    # --- Columns we WANT for the frontend ---
+    # Sensitivity: include ALL the indicators you listed
+    sens_frontend_cols = [
+        "DGUID",
+        "pop_total",
+        "unemployment_rate",
+        "low_income_rate",
+        "seniors_65plus_count",
+        "living_alone_count",
+        "pct_seniors_65plus",
+        "pct_living_alone",
+        "unemployment_rate_n01",
+        "low_income_rate_n01",
+        "pct_seniors_65plus_n01",
+        "pct_living_alone_n01",
+        "sensitivity_index",
+    ]
+    # Keep only those that exist (so script won’t break if you tweak earlier scripts)
+    sens_keep = [c for c in sens_frontend_cols if c in sens.columns]
+
+    if "sensitivity_index" not in sens_keep:
         print("ERROR: sensitivity.csv missing sensitivity_index.")
         print("Columns:", list(sens.columns))
         return 1
 
-    # adaptive_capacity.csv should contain adaptive_capacity_index and green_frac
-    if "adaptive_capacity_index" not in adapt.columns:
+    # Adaptive: include green_frac + adaptive index + class-specific fractions (optional but you want them)
+    adapt_frontend_cols = [
+        "DGUID",
+        "adaptive_capacity_index",
+        "green_frac",
+        "frac_coniferous",
+        "frac_deciduous",
+        "frac_shrub",
+        "frac_modified_herb",
+        "frac_natural_herb",
+    ]
+    adapt_keep = [c for c in adapt_frontend_cols if c in adapt.columns]
+
+    if "adaptive_capacity_index" not in adapt_keep:
         print("ERROR: adaptive_capacity.csv missing adaptive_capacity_index.")
         print("Columns:", list(adapt.columns))
         return 1
 
-    # exposure.csv should contain exposure_index
-    if "exposure_index" not in expo.columns:
-        print("ERROR: exposure.csv missing exposure_index.")
+    # Exposure: keep exposure_mean for dropdown; keep exposure_index for HVI math
+    expo_frontend_cols = [
+        "DGUID",
+        "exposure_mean",
+        "exposure_index",
+    ]
+    expo_keep = [c for c in expo_frontend_cols if c in expo.columns]
+
+    if "exposure_index" not in expo_keep:
+        print("ERROR: exposure.csv missing exposure_index (needed for HVI).")
         print("Columns:", list(expo.columns))
         return 1
 
-    sens_keep = ["DGUID", "sensitivity_index"]
-    adapt_keep = ["DGUID", "adaptive_capacity_index", "green_frac"]
-    expo_keep = ["DGUID", "exposure_mean", "exposure_median", "n_postalcodes", "exposure_index"]
-
-    sens = sens[[c for c in sens_keep if c in sens.columns]].copy()
-    adapt = adapt[[c for c in adapt_keep if c in adapt.columns]].copy()
-    expo = expo[[c for c in expo_keep if c in expo.columns]].copy()
+    # Reduce tables
+    sens = sens[sens_keep].copy()
+    adapt = adapt[adapt_keep].copy()
+    expo = expo[expo_keep].copy()
 
     # --- Left joins anchored to DA universe ---
     out = da.merge(sens, on="DGUID", how="left")
@@ -137,9 +161,6 @@ def main() -> int:
 
     out["hvi_raw"] = E * (S - A)
 
-    # Useful derived versions:
-    # - "shifted" so negatives are allowed but later rescaled
-    # - normalize for mapping (0–1), using only rows with complete inputs
     complete_mask = out["hvi_complete"] & out["hvi_raw"].notna()
     out.loc[~complete_mask, "hvi_raw"] = pd.NA
 
@@ -154,56 +175,71 @@ def main() -> int:
     print("Wrote:", out_csv)
 
     # --- Export GeoJSON for MapLibre ---
-    # Keep only columns we actually want in the frontend (small)
-    keep_props = [
-        "DGUID",
-        "sensitivity_index",
-        "adaptive_capacity_index",
-        "green_frac",
-        "exposure_mean",
-        "n_postalcodes",
-        "exposure_index",
-        "hvi_raw",
-        "hvi_index_n01",
-        "has_sensitivity",
-        "has_adaptive",
-        "has_exposure",
-        "hvi_complete",
-    ]
-    keep_props = [c for c in keep_props if c in out.columns]
+    # Keep: everything you want in dropdown + HVI fields + flags
+    keep_props = (
+        [c for c in sens_frontend_cols if c != "DGUID"]
+        + [c for c in adapt_frontend_cols if c != "DGUID"]
+        + ["exposure_mean"]  # only this one exposed for dropdown
+        + ["hvi_raw", "hvi_index_n01", "has_sensitivity", "has_adaptive", "has_exposure", "hvi_complete"]
+    )
 
-    gdf = out[keep_props + ["geometry"]].copy()
+    # Also keep exposure_index internally? (optional)
+    # If you don't want it visible in frontend dropdown, you can still keep it for debugging.
+    if "exposure_index" in out.columns:
+        keep_props.append("exposure_index")
+
+    # Ensure unique + existing
+    keep_props = [c for c in dict.fromkeys(keep_props) if c in out.columns]
+
+    gdf = out[["DGUID"] + keep_props + ["geometry"]].copy()
 
     # Ensure CRS is WGS84 for web maps / tiling
     if gdf.crs is None:
-        # da.gpkg should already have CRS, but safety fallback
         gdf = gdf.set_crs(CRS_WGS84)
     else:
         gdf = gdf.to_crs(CRS_WGS84)
 
     print_bbox(gdf, "HVI output (WGS84)")
 
-
     # Optional simplification to reduce GeoJSON size
-    # Adjust tolerance if needed: higher = smaller file, less detail
+    # (Safe to keep as-is; you can tune later if you see artifacts)
     gdf["geometry"] = gdf["geometry"].simplify(tolerance=0.0002, preserve_topology=True)
 
-    out_geojson = DATA_INTERMEDIATE / "hvi.geojson"
-
-    # --- Fix NA values so QGIS reads numeric fields correctly ---
-    num_cols = [
+    # Fix numeric columns so QGIS reads them correctly
+    numeric_like = [
+        # sensitivity
+        "pop_total",
+        "unemployment_rate",
+        "low_income_rate",
+        "seniors_65plus_count",
+        "living_alone_count",
+        "pct_seniors_65plus",
+        "pct_living_alone",
+        "unemployment_rate_n01",
+        "low_income_rate_n01",
+        "pct_seniors_65plus_n01",
+        "pct_living_alone_n01",
         "sensitivity_index",
+        # adaptive
         "adaptive_capacity_index",
+        "green_frac",
+        "frac_coniferous",
+        "frac_deciduous",
+        "frac_shrub",
+        "frac_modified_herb",
+        "frac_natural_herb",
+        # exposure
+        "exposure_mean",
         "exposure_index",
+        # hvi
         "hvi_raw",
         "hvi_index_n01",
     ]
-
-    for col in num_cols:
+    for col in numeric_like:
         if col in gdf.columns:
             gdf[col] = pd.to_numeric(gdf[col], errors="coerce")
 
-    # Write GeoJSON
+    out_geojson = DATA_INTERMEDIATE / "hvi.geojson"
     gdf.to_file(out_geojson, driver="GeoJSON")
     print("Wrote:", out_geojson)
 
@@ -221,7 +257,14 @@ def main() -> int:
             f.write("hvi_raw summary (complete only):\n")
             f.write(str(out.loc[complete_mask, "hvi_raw"].describe()) + "\n\n")
             f.write("hvi_index_n01 summary (complete only):\n")
-            f.write(str(pd.to_numeric(out.loc[complete_mask, "hvi_index_n01"], errors='coerce').describe()) + "\n")
+            f.write(str(pd.to_numeric(out.loc[complete_mask, "hvi_index_n01"], errors="coerce").describe()) + "\n")
+
+        # Quick missingness snapshot for your dropdown fields
+        f.write("\nMissingness (selected output fields):\n")
+        miss_cols = ["sensitivity_index", "adaptive_capacity_index", "exposure_mean", "hvi_index_n01"]
+        for c in miss_cols:
+            if c in out.columns:
+                f.write(f"  {c}: {int(out[c].isna().sum()):,}\n")
 
     print("Wrote:", report)
     print("Done. Next: load hvi.geojson in QGIS or MapLibre.")
