@@ -1,14 +1,12 @@
-# scripts/02_census_sensitivity.py
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Dict, Set, List
+from typing import Dict, List, Set
 
 import geopandas as gpd
 import pandas as pd
 
-# --- Make project root importable (same approach as 01_prepare_da.py) ---
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from scripts.config import DATA_INTERMEDIATE, get_inputs  # noqa: E402
@@ -29,8 +27,6 @@ def normalize_01(s: pd.Series) -> pd.Series:
     return (s - mn) / (mx - mn)
 
 
-# --- Exact characteristic name matching (FAST + stable) ---
-# NOTE: These must match the CSV text after .str.strip()
 EXACT_NAME_TO_KEY: Dict[str, str] = {
     "Population, 2021": "pop_total",
     "Unemployment rate": "unemployment_rate",
@@ -38,13 +34,11 @@ EXACT_NAME_TO_KEY: Dict[str, str] = {
     "Living alone": "living_alone_count",
 }
 
-# Seniors: we will sum these COUNT rows (not % rows)
 SENIORS_NAMES: Set[str] = {
     "65 to 74 years",
     "75 years and over",
 }
 
-# Names we care about (early filter for speed)
 NAMES_WE_CARE: Set[str] = set(EXACT_NAME_TO_KEY.keys()) | set(SENIORS_NAMES)
 
 
@@ -52,8 +46,12 @@ def main() -> int:
     ins = get_inputs()
 
     da_gpkg = DATA_INTERMEDIATE / "da.gpkg"
+    adapt_csv = DATA_INTERMEDIATE / "adaptive_capacity.csv"
     if not da_gpkg.exists():
         print(f"ERROR: Missing {da_gpkg}. Run scripts/01_prepare_da.py first.")
+        return 1
+    if not adapt_csv.exists():
+        print(f"ERROR: Missing {adapt_csv}. Run scripts/03_adaptive_capacity.py first.")
         return 1
 
     census_csv = Path(ins.census_csv)
@@ -63,18 +61,26 @@ def main() -> int:
 
     print("=== 02_census_sensitivity.py ===")
     print("DA base:", da_gpkg)
+    print("Eligibility mask:", adapt_csv)
     print("Census CSV:", census_csv)
 
-    # Load DA layer → get valid DGUIDs
     da = gpd.read_file(da_gpkg, layer="da")
     if "DGUID" not in da.columns:
         print("ERROR: DA layer missing DGUID. Check 01_prepare_da output.")
         return 1
 
-    valid_dguids = set(da["DGUID"].astype(str).tolist())
-    print(f"Loaded DGUIDs: {len(valid_dguids):,}")
+    adapt = pd.read_csv(adapt_csv, low_memory=False)
+    required_cols = {"DGUID", "da_eligible"}
+    missing = required_cols - set(adapt.columns)
+    if missing:
+        print(f"ERROR: adaptive_capacity.csv missing required columns: {sorted(missing)}")
+        return 1
 
-    # Read StatCan CSV in chunks
+    adapt["DGUID"] = adapt["DGUID"].astype(str)
+    eligible_dguids = set(adapt.loc[adapt["da_eligible"].fillna(False).astype(bool), "DGUID"].tolist())
+    valid_dguids = set(da["DGUID"].astype(str).tolist()) & eligible_dguids
+    print(f"Loaded eligible DGUIDs: {len(valid_dguids):,}")
+
     usecols = [
         "DGUID",
         "GEO_LEVEL",
@@ -97,9 +103,8 @@ def main() -> int:
     }
 
     print("Streaming census CSV in chunks...")
-    print("  (Tip: this may take a few minutes on a 3.38GB file — no need to stop it)")
+    print("  (Tip: this may take a few minutes on a 3.38GB file - no need to stop it)")
 
-    # Use dtype=str (faster + avoids pandas StringArray overhead on huge files)
     reader = pd.read_csv(
         census_csv,
         usecols=usecols,
@@ -110,38 +115,29 @@ def main() -> int:
     )
 
     for i, chunk in enumerate(reader, start=1):
-        # 1) Keep only DA-level rows (cheap)
         geo_level = chunk["GEO_LEVEL"].fillna("")
         chunk = chunk.loc[geo_level.str.contains("Dissemination", case=False, na=False)]
         if chunk.empty:
             continue
 
-        # Make a copy so we can safely assign without SettingWithCopyWarning
         chunk = chunk.copy()
 
-        # 2) Early filter: keep only the characteristic names we care about (BIG speed win)
         cname = chunk["CHARACTERISTIC_NAME"].fillna("").str.strip()
         chunk = chunk.loc[cname.isin(NAMES_WE_CARE)]
         if chunk.empty:
             continue
 
-        # 3) Now filter to DGUIDs we have geometry for (do this late)
         chunk.loc[:, "DGUID"] = chunk["DGUID"].astype(str)
         chunk = chunk.loc[chunk["DGUID"].isin(valid_dguids)]
         if chunk.empty:
             continue
 
-        # Recompute stripped cname after filtering
         cname = chunk["CHARACTERISTIC_NAME"].fillna("").str.strip()
-
-        # Map to indicator_key
         indicator_key = cname.map(EXACT_NAME_TO_KEY)
 
-        # Seniors rows (sum multiple)
         is_seniors = cname.isin(SENIORS_NAMES)
         indicator_key = indicator_key.where(~is_seniors, "seniors_65plus_count")
 
-        # Keep only matched rows
         keep_mask = indicator_key.notna()
         if not keep_mask.any():
             continue
@@ -149,7 +145,6 @@ def main() -> int:
         out = chunk.loc[keep_mask].copy()
         out.loc[:, "indicator_key"] = indicator_key.loc[keep_mask].astype(str)
 
-        # Update counts
         vc = out["indicator_key"].value_counts()
         for k, v in vc.items():
             if k in found_counts:
@@ -168,62 +163,46 @@ def main() -> int:
     df = pd.concat(selected_chunks, ignore_index=True)
     print("Selected rows:", len(df))
 
-    # Convert numeric columns (after selection only, to keep it fast)
     df["C1_COUNT_TOTAL"] = to_num(df["C1_COUNT_TOTAL"])
     df["C10_RATE_TOTAL"] = to_num(df["C10_RATE_TOTAL"])
-    
-    # ---- Clean seniors rows: keep only true count-like rows ----
+
     is_seniors = df["indicator_key"] == "seniors_65plus_count"
-
-    # drop rows where count is missing
     df.loc[is_seniors & df["C1_COUNT_TOTAL"].isna(), "C1_COUNT_TOTAL"] = pd.NA
-
-    # drop suspicious rows where "count" equals "rate" (usually not real counts)
     df.loc[
         is_seniors
         & df["C1_COUNT_TOTAL"].notna()
         & df["C10_RATE_TOTAL"].notna()
         & (df["C1_COUNT_TOTAL"] == df["C10_RATE_TOTAL"]),
-        "C1_COUNT_TOTAL"
+        "C1_COUNT_TOTAL",
     ] = pd.NA
 
-    # Debug: write extracted long slice
     out_long = DATA_INTERMEDIATE / "census_selected_long.csv"
     df.to_csv(out_long, index=False)
     print("Wrote:", out_long)
 
-    # Build wide DA table
     wide = pd.DataFrame({"DGUID": sorted(valid_dguids)}).set_index("DGUID")
 
-    # Population total
     pop = df[df["indicator_key"] == "pop_total"].groupby("DGUID")["C1_COUNT_TOTAL"].first()
     wide["pop_total"] = pop
 
-    # Unemployment rate
     unemp = df[df["indicator_key"] == "unemployment_rate"].groupby("DGUID")["C10_RATE_TOTAL"].first()
     wide["unemployment_rate"] = unemp
 
-    # Low income rate (LIM-AT prevalence %)
     lowinc = df[df["indicator_key"] == "low_income_rate"].groupby("DGUID")["C10_RATE_TOTAL"].first()
     wide["low_income_rate"] = lowinc
 
-    # Seniors (sum of matched age bins)
     seniors = df[df["indicator_key"] == "seniors_65plus_count"].groupby("DGUID")["C1_COUNT_TOTAL"].sum()
     wide["seniors_65plus_count"] = seniors
 
-    # Seniors sanity: cannot exceed population
     wide.loc[wide["seniors_65plus_count"] > wide["pop_total"], "seniors_65plus_count"] = pd.NA
     wide.loc[wide["seniors_65plus_count"] < 0, "seniors_65plus_count"] = pd.NA
 
-    # Living alone count
     alone = df[df["indicator_key"] == "living_alone_count"].groupby("DGUID")["C1_COUNT_TOTAL"].first()
     wide["living_alone_count"] = alone
 
-    # Derived percents
     wide["pct_seniors_65plus"] = (wide["seniors_65plus_count"] / wide["pop_total"]) * 100.0
     wide["pct_living_alone"] = (wide["living_alone_count"] / wide["pop_total"]) * 100.0
 
-    # Normalize components (0–1)
     components = {
         "unemployment_rate": wide["unemployment_rate"],
         "low_income_rate": wide["low_income_rate"],
@@ -236,17 +215,16 @@ def main() -> int:
 
     wide["sensitivity_index"] = wide[[f"{k}_n01" for k in components]].mean(axis=1, skipna=True)
 
-    # Write output
     out_csv = DATA_INTERMEDIATE / "sensitivity.csv"
     wide.reset_index().to_csv(out_csv, index=False)
     print("Wrote:", out_csv)
 
-    # Debug report
     report_path = DATA_INTERMEDIATE / "02_census_debug_report.txt"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("02_census_sensitivity debug report\n")
         f.write(f"Census CSV: {census_csv}\n")
-        f.write(f"DA count: {len(valid_dguids):,}\n")
+        f.write(f"Eligibility mask: {adapt_csv}\n")
+        f.write(f"Eligible DA count: {len(valid_dguids):,}\n")
         f.write(f"Selected rows: {len(df):,}\n\n")
 
         f.write("Matched row counts by indicator:\n")
@@ -260,7 +238,7 @@ def main() -> int:
 
     print("Wrote:", report_path)
     print("Matched rows by indicator:", found_counts)
-    print("Done. Next: join sensitivity.csv to da.gpkg in QGIS and visualize sensitivity_index.")
+    print("Done. Next: run scripts/04_exposure_lst.py and visualize sensitivity_index if needed.")
     return 0
 
 

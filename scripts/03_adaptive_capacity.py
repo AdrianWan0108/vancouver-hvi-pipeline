@@ -1,4 +1,3 @@
-# scripts/03_adaptive_capacity.py
 from __future__ import annotations
 
 import sys
@@ -11,19 +10,18 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from scripts.config import DATA_INTERMEDIATE, get_inputs  # noqa: E402
 
 
-# Vegetation classes (your “green” definition)
-GREEN_CLASSES = {6, 7, 8, 9, 10}
-
-# Optional: expose each vegetation class as its own fraction for frontend layers
+# Vegetation classes used for adaptive capacity (woody vegetation only).
+GREEN_CLASSES = {6, 7, 8}
 CLASS_LABELS = {
     6: "coniferous",
     7: "deciduous",
     8: "shrub",
-    9: "modified_herb",
-    10: "natural_herb",
 }
+WATER_CLASS = 12
+WATER_LABEL = "water"
+WATER_EXCLUDE_THRESHOLD = 0.80
 
-# In your raster, code 0 is very likely background/outside (treat as nodata)
+# In the raster, code 0 is treated as nodata/background.
 NODATA_VALUE = 0
 
 
@@ -54,6 +52,8 @@ def main() -> int:
     print("Landcover raster:", land_tif)
     print("GREEN_CLASSES:", sorted(GREEN_CLASSES))
     print("CLASS_LABELS:", CLASS_LABELS)
+    print("WATER_CLASS:", WATER_CLASS)
+    print("WATER_EXCLUDE_THRESHOLD:", WATER_EXCLUDE_THRESHOLD)
     print("Assumed NODATA_VALUE:", NODATA_VALUE)
 
     try:
@@ -74,7 +74,6 @@ def main() -> int:
 
     from shapely.geometry import box
 
-    # --- Load DAs (already Metro Vancouver only, from script 01) ---
     da = gpd.read_file(da_gpkg, layer="da")
     if "DGUID" not in da.columns:
         print("ERROR: DA layer missing DGUID.")
@@ -83,7 +82,6 @@ def main() -> int:
         print("ERROR: DA CRS missing in da.gpkg.")
         return 1
 
-    # --- Open raster + get bounds/CRS/pixel area ---
     with rasterio.open(land_tif) as src:
         raster_crs = src.crs
         if raster_crs is None:
@@ -94,17 +92,15 @@ def main() -> int:
         px_h = abs(src.transform.e)
         pixel_area = px_w * px_h
 
-        bounds = src.bounds  # left, bottom, right, top
+        bounds = src.bounds
         raster_bbox = box(bounds.left, bounds.bottom, bounds.right, bounds.top)
 
     print("Raster CRS:", raster_crs)
     print(f"Raster pixel: {px_w} x {px_h} => pixel_area={pixel_area}")
     print("Raster bounds:", bounds)
 
-    # Reproject DA polygons to raster CRS (critical)
     da = da.to_crs(raster_crs)
 
-    # Filter: keep only DAs that intersect raster bbox (safety)
     before = len(da)
     da = da[da.geometry.intersects(raster_bbox)].copy()
     after = len(da)
@@ -117,7 +113,6 @@ def main() -> int:
     da["da_area_m2"] = da.geometry.area
 
     print("Computing zonal categorical counts (after filtering)...")
-
     zs = zonal_stats(
         da.geometry,
         str(land_tif),
@@ -129,21 +124,18 @@ def main() -> int:
     out = pd.DataFrame({"DGUID": da["DGUID"].astype(str).values})
     out["da_area_m2"] = da["da_area_m2"].astype(float).values
 
-    # We’ll collect:
-    # - total_pixels (excluding nodata)
-    # - per-class pixels for 6/7/8/9/10
+    tracked_codes = sorted(set(CLASS_LABELS.keys()) | {WATER_CLASS})
     total_pixels_list: list = []
-    per_class_pixels = {code: [] for code in CLASS_LABELS.keys()}
+    per_class_pixels = {code: [] for code in tracked_codes}
 
     for d in zs:
         if not isinstance(d, dict) or len(d) == 0:
             total_pixels_list.append(pd.NA)
-            for code in per_class_pixels:
+            for code in tracked_codes:
                 per_class_pixels[code].append(pd.NA)
             continue
 
-        # total pixels excluding nodata
-        tot = 0
+        total_pixels = 0
         for k, v in d.items():
             try:
                 kk = int(k)
@@ -151,31 +143,34 @@ def main() -> int:
                 continue
             if kk == NODATA_VALUE:
                 continue
-            tot += int(v)
+            total_pixels += int(v)
 
-        total_pixels_list.append(tot)
-
-        # per-class pixels (6/7/8/9/10)
-        for code in per_class_pixels:
+        total_pixels_list.append(total_pixels)
+        for code in tracked_codes:
             per_class_pixels[code].append(int(d.get(code, 0)))
 
     out["total_pixels"] = pd.Series(total_pixels_list, dtype="Float64")
 
-    # Add per-class pixels + fractions (optional but useful for frontend layers)
     for code, label in CLASS_LABELS.items():
         out[f"pixels_{label}"] = pd.Series(per_class_pixels[code], dtype="Float64")
         out[f"frac_{label}"] = out[f"pixels_{label}"] / out["total_pixels"]
 
-    # Define green_frac as the sum of vegetation class fractions
-    frac_cols = [f"frac_{label}" for label in CLASS_LABELS.values()]
-    out["green_frac"] = out[frac_cols].sum(axis=1, skipna=False)
+    out[f"pixels_{WATER_LABEL}"] = pd.Series(per_class_pixels[WATER_CLASS], dtype="Float64")
+    out["water_frac"] = out[f"pixels_{WATER_LABEL}"] / out["total_pixels"]
 
-    # Optional: green_area (not needed, but sometimes nice for QA)
-    out["green_pixels"] = out[[f"pixels_{label}" for label in CLASS_LABELS.values()]].sum(axis=1, skipna=False)
+    green_pixel_cols = [f"pixels_{CLASS_LABELS[code]}" for code in sorted(GREEN_CLASSES)]
+    green_frac_cols = [f"frac_{CLASS_LABELS[code]}" for code in sorted(GREEN_CLASSES)]
+    out["green_pixels"] = out[green_pixel_cols].sum(axis=1, skipna=False)
+    out["green_frac"] = out[green_frac_cols].sum(axis=1, skipna=False)
     out["green_area_m2"] = out["green_pixels"] * float(pixel_area)
 
-    # Adaptive capacity index (0–1)
+    out["exclude_water_da"] = out["water_frac"] >= WATER_EXCLUDE_THRESHOLD
+    out.loc[out["total_pixels"].isna() | (out["total_pixels"] <= 0), "exclude_water_da"] = True
+    out["exclude_water_da"] = out["exclude_water_da"].fillna(True).astype(bool)
+    out["da_eligible"] = ~out["exclude_water_da"]
+
     out["adaptive_capacity_index"] = normalize_01(out["green_frac"])
+    out.loc[~out["da_eligible"], ["green_frac", "green_area_m2", "adaptive_capacity_index"]] = pd.NA
 
     out_csv = DATA_INTERMEDIATE / "adaptive_capacity.csv"
     out.to_csv(out_csv, index=False)
@@ -190,7 +185,10 @@ def main() -> int:
         f.write(f"NODATA_VALUE: {NODATA_VALUE}\n")
         f.write(f"GREEN_CLASSES: {sorted(GREEN_CLASSES)}\n")
         f.write(f"CLASS_LABELS: {CLASS_LABELS}\n")
-        f.write(f"DAs used (after bbox filter): {len(out):,}\n\n")
+        f.write(f"WATER_CLASS: {WATER_CLASS}\n")
+        f.write(f"WATER_EXCLUDE_THRESHOLD: {WATER_EXCLUDE_THRESHOLD}\n")
+        f.write(f"DAs used (after bbox filter): {len(out):,}\n")
+        f.write(f"DAs excluded as water-dominated: {int(out['exclude_water_da'].sum()):,}\n\n")
 
         f.write("Missingness:\n")
         miss = out.isna().sum().sort_values(ascending=False)
@@ -198,14 +196,17 @@ def main() -> int:
             f.write(f"  {col}: {int(cnt):,}\n")
 
         f.write("\nFraction summaries:\n")
-        for col in ["green_frac"] + frac_cols:
+        for col in ["green_frac", "water_frac"] + green_frac_cols:
             if col in out.columns:
                 f.write(f"\n{col}:\n")
-                f.write(str(pd.to_numeric(out[col], errors="coerce").describe(percentiles=[0.05, 0.25, 0.5, 0.75, 0.95])) + "\n")
+                summary = pd.to_numeric(out[col], errors="coerce").describe(
+                    percentiles=[0.05, 0.25, 0.5, 0.75, 0.95]
+                )
+                f.write(str(summary) + "\n")
 
     print("Wrote:", report_path)
-    print("Done. Next: join adaptive_capacity.csv to da.gpkg (by DGUID) and visualize green_frac / adaptive_capacity_index.")
-    print("Optional layers now available: frac_coniferous, frac_deciduous, frac_shrub, frac_modified_herb, frac_natural_herb.")
+    print("Done. Next: run scripts/02_census_sensitivity.py and scripts/04_exposure_lst.py.")
+    print("Optional layers now available: frac_coniferous, frac_deciduous, frac_shrub, water_frac.")
     return 0
 
 

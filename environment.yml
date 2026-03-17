@@ -19,3 +19,4 @@ dependencies:
   - pip:
       - mapclassify
       - python-dotenv
+      - rasterstats
