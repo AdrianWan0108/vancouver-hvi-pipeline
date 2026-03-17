@@ -8,6 +8,8 @@ import pandas as pd
 
 BAD_SENTINELS = {-9999, -9999.0, -999, -999.0}
 VALID_RANGE = (-50, 80)
+EXPOSURE_LST_WEIGHT = 0.67
+EXPOSURE_HARDSCAPE_WEIGHT = 0.33
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -39,12 +41,12 @@ def main() -> int:
     ins = get_inputs()
 
     da_gpkg = DATA_INTERMEDIATE / "da.gpkg"
-    adapt_csv = DATA_INTERMEDIATE / "adaptive_capacity.csv"
+    capacity_csv = DATA_INTERMEDIATE / "landcover_housing_capacity.csv"
     if not da_gpkg.exists():
         print(f"ERROR: Missing {da_gpkg}. Run scripts/01_prepare_da.py first.")
         return 1
-    if not adapt_csv.exists():
-        print(f"ERROR: Missing {adapt_csv}. Run scripts/03_adaptive_capacity.py first.")
+    if not capacity_csv.exists():
+        print(f"ERROR: Missing {capacity_csv}. Run scripts/02_landcover_housing_capacity.py first.")
         return 1
 
     wtlst_csv = Path(ins.canue_wtlst_csv)
@@ -57,9 +59,9 @@ def main() -> int:
         print(f"ERROR: Missing DMTI CSV: {dmti_csv}")
         return 1
 
-    print("=== 04_exposure_lst.py ===")
+    print("=== 04_canue_exposure.py ===")
     print("DA base:", da_gpkg)
-    print("Eligibility mask:", adapt_csv)
+    print("Landcover/capacity input:", capacity_csv)
     print("WTLST CSV:", wtlst_csv)
     print("DMTI CSV:", dmti_csv)
     print("Exposure field:", EXPOSURE_FIELD)
@@ -72,11 +74,11 @@ def main() -> int:
         print("ERROR: DA CRS missing.")
         return 1
 
-    adapt = pd.read_csv(adapt_csv, low_memory=False)
-    required_cols = {"DGUID", "da_eligible"}
+    adapt = pd.read_csv(capacity_csv, low_memory=False)
+    required_cols = {"DGUID", "da_eligible", "hardscape_frac"}
     missing = required_cols - set(adapt.columns)
     if missing:
-        print(f"ERROR: adaptive_capacity.csv missing required columns: {sorted(missing)}")
+        print(f"ERROR: landcover_housing_capacity.csv missing required columns: {sorted(missing)}")
         return 1
 
     adapt["DGUID"] = adapt["DGUID"].astype(str)
@@ -173,15 +175,24 @@ def main() -> int:
         .reset_index()
     )
 
+    hardscape = adapt[["DGUID", "hardscape_frac"]].copy()
+    hardscape["hardscape_frac"] = pd.to_numeric(hardscape["hardscape_frac"], errors="coerce")
+    agg = agg.merge(hardscape, on="DGUID", how="left")
+
     agg["exposure_mean_n01"] = normalize_01(agg["exposure_mean"])
     agg["exposure_median_n01"] = normalize_01(agg["exposure_median"])
-    agg["exposure_index"] = agg["exposure_mean_n01"]
+    agg["hardscape_frac_n01"] = normalize_01(agg["hardscape_frac"])
+    agg["exposure_index_lst_only"] = agg["exposure_mean_n01"]
+    agg["exposure_index"] = (
+        (EXPOSURE_LST_WEIGHT * pd.to_numeric(agg["exposure_mean_n01"], errors="coerce"))
+        + (EXPOSURE_HARDSCAPE_WEIGHT * pd.to_numeric(agg["hardscape_frac_n01"], errors="coerce"))
+    )
 
-    out_csv = DATA_INTERMEDIATE / "exposure.csv"
+    out_csv = DATA_INTERMEDIATE / "canue_exposure.csv"
     agg.to_csv(out_csv, index=False)
     print("Wrote:", out_csv)
 
-    out_pts = DATA_INTERMEDIATE / "exposure_points_preview.geojson"
+    out_pts = DATA_INTERMEDIATE / "canue_exposure_points_preview.geojson"
     try:
         pts_wgs = pts.to_crs("EPSG:4326")
         pts_wgs.to_file(out_pts, driver="GeoJSON")
@@ -189,15 +200,17 @@ def main() -> int:
     except Exception as e:
         print("NOTE: could not write point preview geojson:", repr(e))
 
-    report = DATA_INTERMEDIATE / "04_exposure_debug_report.txt"
+    report = DATA_INTERMEDIATE / "04_canue_exposure_debug_report.txt"
     with open(report, "w", encoding="utf-8") as f:
-        f.write("04_exposure_lst debug report\n")
-        f.write(f"Eligibility mask: {adapt_csv}\n")
+        f.write("04_canue_exposure debug report\n")
+        f.write(f"Landcover/capacity input: {capacity_csv}\n")
         f.write(f"WTLST CSV: {wtlst_csv}\n")
         f.write(f"DMTI CSV: {dmti_csv}\n")
         f.write(f"Exposure field: {EXPOSURE_FIELD}\n")
         f.write(f"BAD_SENTINELS: {sorted(list(BAD_SENTINELS))}\n")
         f.write(f"VALID_RANGE: {VALID_RANGE}\n\n")
+        f.write(f"EXPOSURE_LST_WEIGHT: {EXPOSURE_LST_WEIGHT}\n")
+        f.write(f"EXPOSURE_HARDSCAPE_WEIGHT: {EXPOSURE_HARDSCAPE_WEIGHT}\n\n")
 
         f.write("WTLST cleaning:\n")
         f.write(f"  WTLST rows total: {n_w_total:,}\n")
@@ -217,8 +230,15 @@ def main() -> int:
         f.write("Exposure mean summary:\n")
         f.write(str(agg["exposure_mean"].describe()) + "\n")
 
+        for col in ["hardscape_frac", "exposure_index_lst_only", "exposure_index"]:
+            f.write(f"\n{col} summary:\n")
+            summary = pd.to_numeric(agg[col], errors="coerce").describe(
+                percentiles=[0.05, 0.25, 0.5, 0.75, 0.95]
+            )
+            f.write(str(summary) + "\n")
+
     print("Wrote:", report)
-    print("Done. Next: run scripts/05_hvi_composite.py and visualize exposure_index if needed.")
+    print("Done. Next: run scripts/05_build_hvi_outputs.py and visualize exposure_index if needed.")
     return 0
 
 

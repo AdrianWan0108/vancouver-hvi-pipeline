@@ -13,6 +13,19 @@ The goal is to construct a composite Heat Vulnerability Index for Metro Vancouve
 - Sensitivity
 - Adaptive Capacity
 
+The current production HVI formula is:
+
+```text
+HVI = (E + S + (1 - A)) / 3
+```
+
+where:
+- `E = exposure_index`
+- `S = sensitivity_index`
+- `A = adaptive_capacity_index`
+
+This production score is already bounded to `0-1`, so the exported HVI fields do not require an additional min-max normalization step.
+
 The final outputs are intended for a web map frontend, with layers for:
 - final HVI
 - component indices
@@ -21,10 +34,13 @@ The final outputs are intended for a web map frontend, with layers for:
 ## Current Outputs
 
 After running the full pipeline, the main outputs are written to `data_intermediate/`:
-- `hvi.geojson`: DA-level HVI and component attributes
+- `hvi_da.geojson`: DA-level HVI and component attributes
 - `hvi_regions.geojson`: municipality-level HVI derived from dissolved retained DAs
-- `hvi_components.csv`: DA-level component table without geometry
+- `hvi_da_components.csv`: DA-level component table without geometry
 - `hvi_regions_components.csv`: municipality-level component table without geometry
+- `census_sensitivity.csv`: census-derived sensitivity component table
+- `landcover_housing_capacity.csv`: landcover, housing-capacity, hardscape, and DA eligibility table
+- `canue_exposure.csv`: CANUE/DMTI exposure component table
 
 Water-dominated DAs are excluded from final outputs using landcover class `12` and the rule:
 - `water_frac >= 0.80`
@@ -35,10 +51,11 @@ The scripts live in `scripts/` and should be run in this order:
 
 ```bash
 python scripts/01_prepare_da.py
-python scripts/03_adaptive_capacity.py
-python scripts/02_census_sensitivity.py
-python scripts/04_exposure_lst.py
-python scripts/05_hvi_composite.py
+python scripts/02_landcover_housing_capacity.py
+python scripts/03_census_social.py
+python scripts/04_canue_exposure.py
+python scripts/05_build_hvi_outputs.py
+python scripts/06_formula_review.py  # optional formula comparison stage
 ```
 
 ## Script Responsibilities
@@ -49,17 +66,20 @@ python scripts/05_hvi_composite.py
 - `scripts/01_prepare_da.py`
   Loads DA boundaries, filters them to Metro Vancouver, and writes the base DA geometry layer.
 
-- `scripts/03_adaptive_capacity.py`
-  Processes landcover, computes adaptive capacity from classes `6`, `7`, and `8`, and creates the DA eligibility mask used to exclude water-dominated DAs.
+- `scripts/02_landcover_housing_capacity.py`
+  Processes landcover plus housing-capacity census inputs, computes adaptive capacity, emits hardscape fractions, and creates the DA eligibility mask used to exclude water-dominated DAs.
 
-- `scripts/02_census_sensitivity.py`
-  Processes DA-level census variables for eligible DAs and computes the sensitivity index.
+- `scripts/03_census_social.py`
+  Processes DA-level census social variables for eligible DAs and computes the sensitivity index.
 
-- `scripts/04_exposure_lst.py`
-  Aggregates CANUE land surface temperature values for eligible DAs and computes the exposure index.
+- `scripts/04_canue_exposure.py`
+  Aggregates CANUE land surface temperature values for eligible DAs, combines them with hardscape fractions, and computes the exposure index.
 
-- `scripts/05_hvi_composite.py`
-  Joins component tables, computes the final HVI, exports the DA GeoJSON, and builds the municipality layer by dissolving retained DAs.
+- `scripts/05_build_hvi_outputs.py`
+  Joins component tables, computes the production HVI using the additive protective formula, exports the DA GeoJSON, and builds the municipality layer by dissolving retained DAs.
+
+- `scripts/06_formula_review.py`
+  Compares multiple HVI formulas on the current normalized `Exposure`, `Sensitivity`, and `Adaptive Capacity` outputs without changing the production HVI files.
 
 ## Adaptive Capacity Method
 
@@ -106,7 +126,7 @@ conda activate vancouver-hvi
 ```
 
 Note:
-`scripts/03_adaptive_capacity.py` also requires `rasterstats`.
+`scripts/02_landcover_housing_capacity.py` also requires `rasterstats`.
 
 ## Notes
 

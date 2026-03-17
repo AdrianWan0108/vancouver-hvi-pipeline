@@ -34,24 +34,26 @@ EXACT_NAME_TO_KEY: Dict[str, str] = {
     "Living alone": "living_alone_count",
 }
 
-SENIORS_NAMES: Set[str] = {
-    "65 to 74 years",
-    "75 years and over",
+AGE_CHARACTERISTIC_ID_TO_KEY: Dict[str, str] = {
+    "1462": "seniors_65to74_count",
+    "1463": "seniors_75to84_count",
+    "1464": "seniors_85plus_count",
 }
 
-NAMES_WE_CARE: Set[str] = set(EXACT_NAME_TO_KEY.keys()) | set(SENIORS_NAMES)
+NAMES_WE_CARE: Set[str] = set(EXACT_NAME_TO_KEY.keys())
+AGE_IDS_WE_CARE: Set[str] = set(AGE_CHARACTERISTIC_ID_TO_KEY.keys())
 
 
 def main() -> int:
     ins = get_inputs()
 
     da_gpkg = DATA_INTERMEDIATE / "da.gpkg"
-    adapt_csv = DATA_INTERMEDIATE / "adaptive_capacity.csv"
+    capacity_csv = DATA_INTERMEDIATE / "landcover_housing_capacity.csv"
     if not da_gpkg.exists():
         print(f"ERROR: Missing {da_gpkg}. Run scripts/01_prepare_da.py first.")
         return 1
-    if not adapt_csv.exists():
-        print(f"ERROR: Missing {adapt_csv}. Run scripts/03_adaptive_capacity.py first.")
+    if not capacity_csv.exists():
+        print(f"ERROR: Missing {capacity_csv}. Run scripts/02_landcover_housing_capacity.py first.")
         return 1
 
     census_csv = Path(ins.census_csv)
@@ -59,9 +61,9 @@ def main() -> int:
         print(f"ERROR: Census CSV not found: {census_csv}")
         return 1
 
-    print("=== 02_census_sensitivity.py ===")
+    print("=== 03_census_social.py ===")
     print("DA base:", da_gpkg)
-    print("Eligibility mask:", adapt_csv)
+    print("Landcover/capacity input:", capacity_csv)
     print("Census CSV:", census_csv)
 
     da = gpd.read_file(da_gpkg, layer="da")
@@ -69,11 +71,11 @@ def main() -> int:
         print("ERROR: DA layer missing DGUID. Check 01_prepare_da output.")
         return 1
 
-    adapt = pd.read_csv(adapt_csv, low_memory=False)
+    adapt = pd.read_csv(capacity_csv, low_memory=False)
     required_cols = {"DGUID", "da_eligible"}
     missing = required_cols - set(adapt.columns)
     if missing:
-        print(f"ERROR: adaptive_capacity.csv missing required columns: {sorted(missing)}")
+        print(f"ERROR: landcover_housing_capacity.csv missing required columns: {sorted(missing)}")
         return 1
 
     adapt["DGUID"] = adapt["DGUID"].astype(str)
@@ -99,7 +101,9 @@ def main() -> int:
         "unemployment_rate": 0,
         "low_income_rate": 0,
         "living_alone_count": 0,
-        "seniors_65plus_count": 0,
+        "seniors_65to74_count": 0,
+        "seniors_75to84_count": 0,
+        "seniors_85plus_count": 0,
     }
 
     print("Streaming census CSV in chunks...")
@@ -122,8 +126,11 @@ def main() -> int:
 
         chunk = chunk.copy()
 
-        cname = chunk["CHARACTERISTIC_NAME"].fillna("").str.strip()
-        chunk = chunk.loc[cname.isin(NAMES_WE_CARE)]
+        chunk["CHARACTERISTIC_NAME"] = chunk["CHARACTERISTIC_NAME"].fillna("").str.strip()
+        chunk["CHARACTERISTIC_ID"] = chunk["CHARACTERISTIC_ID"].fillna("").astype(str).str.strip()
+
+        keep_row = chunk["CHARACTERISTIC_NAME"].isin(NAMES_WE_CARE) | chunk["CHARACTERISTIC_ID"].isin(AGE_IDS_WE_CARE)
+        chunk = chunk.loc[keep_row]
         if chunk.empty:
             continue
 
@@ -132,11 +139,8 @@ def main() -> int:
         if chunk.empty:
             continue
 
-        cname = chunk["CHARACTERISTIC_NAME"].fillna("").str.strip()
-        indicator_key = cname.map(EXACT_NAME_TO_KEY)
-
-        is_seniors = cname.isin(SENIORS_NAMES)
-        indicator_key = indicator_key.where(~is_seniors, "seniors_65plus_count")
+        indicator_key = chunk["CHARACTERISTIC_NAME"].map(EXACT_NAME_TO_KEY)
+        indicator_key = indicator_key.combine_first(chunk["CHARACTERISTIC_ID"].map(AGE_CHARACTERISTIC_ID_TO_KEY))
 
         keep_mask = indicator_key.notna()
         if not keep_mask.any():
@@ -166,17 +170,18 @@ def main() -> int:
     df["C1_COUNT_TOTAL"] = to_num(df["C1_COUNT_TOTAL"])
     df["C10_RATE_TOTAL"] = to_num(df["C10_RATE_TOTAL"])
 
-    is_seniors = df["indicator_key"] == "seniors_65plus_count"
-    df.loc[is_seniors & df["C1_COUNT_TOTAL"].isna(), "C1_COUNT_TOTAL"] = pd.NA
+    age_count_keys = {"seniors_65to74_count", "seniors_75to84_count", "seniors_85plus_count"}
+    is_age_count = df["indicator_key"].isin(age_count_keys)
+    df.loc[is_age_count & df["C1_COUNT_TOTAL"].isna(), "C1_COUNT_TOTAL"] = pd.NA
     df.loc[
-        is_seniors
+        is_age_count
         & df["C1_COUNT_TOTAL"].notna()
         & df["C10_RATE_TOTAL"].notna()
         & (df["C1_COUNT_TOTAL"] == df["C10_RATE_TOTAL"]),
         "C1_COUNT_TOTAL",
     ] = pd.NA
 
-    out_long = DATA_INTERMEDIATE / "census_selected_long.csv"
+    out_long = DATA_INTERMEDIATE / "census_social_selected_long.csv"
     df.to_csv(out_long, index=False)
     print("Wrote:", out_long)
 
@@ -191,39 +196,69 @@ def main() -> int:
     lowinc = df[df["indicator_key"] == "low_income_rate"].groupby("DGUID")["C10_RATE_TOTAL"].first()
     wide["low_income_rate"] = lowinc
 
-    seniors = df[df["indicator_key"] == "seniors_65plus_count"].groupby("DGUID")["C1_COUNT_TOTAL"].sum()
-    wide["seniors_65plus_count"] = seniors
+    seniors_65to74 = df[df["indicator_key"] == "seniors_65to74_count"].groupby("DGUID")["C1_COUNT_TOTAL"].first()
+    seniors_75to84 = df[df["indicator_key"] == "seniors_75to84_count"].groupby("DGUID")["C1_COUNT_TOTAL"].first()
+    seniors_85plus = df[df["indicator_key"] == "seniors_85plus_count"].groupby("DGUID")["C1_COUNT_TOTAL"].first()
+    wide["seniors_65to74_count"] = seniors_65to74
+    wide["seniors_75to84_count"] = seniors_75to84
+    wide["seniors_85plus_count"] = seniors_85plus
+    wide["seniors_75plus_count"] = wide[["seniors_75to84_count", "seniors_85plus_count"]].sum(axis=1, min_count=1)
+    wide["seniors_65plus_count"] = wide[
+        ["seniors_65to74_count", "seniors_75to84_count", "seniors_85plus_count"]
+    ].sum(axis=1, min_count=1)
 
-    wide.loc[wide["seniors_65plus_count"] > wide["pop_total"], "seniors_65plus_count"] = pd.NA
-    wide.loc[wide["seniors_65plus_count"] < 0, "seniors_65plus_count"] = pd.NA
+    for col in [
+        "seniors_65to74_count",
+        "seniors_75to84_count",
+        "seniors_85plus_count",
+        "seniors_75plus_count",
+        "seniors_65plus_count",
+    ]:
+        wide.loc[wide[col] > wide["pop_total"], col] = pd.NA
+        wide.loc[wide[col] < 0, col] = pd.NA
 
     alone = df[df["indicator_key"] == "living_alone_count"].groupby("DGUID")["C1_COUNT_TOTAL"].first()
     wide["living_alone_count"] = alone
 
     wide["pct_seniors_65plus"] = (wide["seniors_65plus_count"] / wide["pop_total"]) * 100.0
+    wide["pct_seniors_75plus"] = (wide["seniors_75plus_count"] / wide["pop_total"]) * 100.0
     wide["pct_living_alone"] = (wide["living_alone_count"] / wide["pop_total"]) * 100.0
 
-    components = {
+    normalized_components = {
         "unemployment_rate": wide["unemployment_rate"],
         "low_income_rate": wide["low_income_rate"],
         "pct_seniors_65plus": wide["pct_seniors_65plus"],
+        "pct_seniors_75plus": wide["pct_seniors_75plus"],
         "pct_living_alone": wide["pct_living_alone"],
     }
 
-    for k, s in components.items():
+    for k, s in normalized_components.items():
         wide[f"{k}_n01"] = normalize_01(s)
 
-    wide["sensitivity_index"] = wide[[f"{k}_n01" for k in components]].mean(axis=1, skipna=True)
+    final_component_cols = [
+        "unemployment_rate_n01",
+        "low_income_rate_n01",
+        "pct_seniors_65plus_n01",
+        "pct_living_alone_n01",
+    ]
+    comparison_component_cols = [
+        "unemployment_rate_n01",
+        "low_income_rate_n01",
+        "pct_seniors_75plus_n01",
+        "pct_living_alone_n01",
+    ]
+    wide["sensitivity_index"] = wide[final_component_cols].mean(axis=1, skipna=True)
+    wide["sensitivity_index_75plus_comparison"] = wide[comparison_component_cols].mean(axis=1, skipna=True)
 
-    out_csv = DATA_INTERMEDIATE / "sensitivity.csv"
+    out_csv = DATA_INTERMEDIATE / "census_sensitivity.csv"
     wide.reset_index().to_csv(out_csv, index=False)
     print("Wrote:", out_csv)
 
-    report_path = DATA_INTERMEDIATE / "02_census_debug_report.txt"
+    report_path = DATA_INTERMEDIATE / "03_census_social_debug_report.txt"
     with open(report_path, "w", encoding="utf-8") as f:
-        f.write("02_census_sensitivity debug report\n")
+        f.write("03_census_social debug report\n")
         f.write(f"Census CSV: {census_csv}\n")
-        f.write(f"Eligibility mask: {adapt_csv}\n")
+        f.write(f"Landcover/capacity input: {capacity_csv}\n")
         f.write(f"Eligible DA count: {len(valid_dguids):,}\n")
         f.write(f"Selected rows: {len(df):,}\n\n")
 
@@ -236,9 +271,22 @@ def main() -> int:
         for col, cnt in miss.items():
             f.write(f"  {col}: {int(cnt):,}\n")
 
+        f.write("\nSensitivity comparison summaries:\n")
+        for col in [
+            "pct_seniors_65plus",
+            "pct_seniors_75plus",
+            "sensitivity_index",
+            "sensitivity_index_75plus_comparison",
+        ]:
+            f.write(f"\n{col}:\n")
+            summary = pd.to_numeric(wide[col], errors="coerce").describe(
+                percentiles=[0.05, 0.25, 0.5, 0.75, 0.95]
+            )
+            f.write(str(summary) + "\n")
+
     print("Wrote:", report_path)
     print("Matched rows by indicator:", found_counts)
-    print("Done. Next: run scripts/04_exposure_lst.py and visualize sensitivity_index if needed.")
+    print("Done. Next: run scripts/04_canue_exposure.py and visualize sensitivity_index if needed.")
     return 0
 
 
