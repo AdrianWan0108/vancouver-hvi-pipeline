@@ -75,6 +75,8 @@ def main() -> int:
         return 1
 
     da["DGUID"] = da["DGUID"].astype(str)
+    if "DAUID" in da.columns:
+        da["DAUID"] = da["DAUID"].astype(str)
     da = da.to_crs(CRS_WGS84)
 
     adapt = pd.read_csv(capacity_csv, low_memory=False)
@@ -169,7 +171,11 @@ def main() -> int:
     adapt = adapt[adapt_keep].copy()
     expo = expo[expo_keep].copy()
 
-    out = da[["DGUID", "geometry"]].copy()
+    da_id_cols = ["DGUID"]
+    if "DAUID" in da.columns:
+        da_id_cols.append("DAUID")
+
+    out = da[da_id_cols + ["geometry"]].copy()
     out = out.merge(sens, on="DGUID", how="left")
     out = out.merge(adapt, on="DGUID", how="left")
     out = out.merge(expo, on="DGUID", how="left")
@@ -205,7 +211,7 @@ def main() -> int:
         keep_props.append("exposure_index")
     keep_props = [c for c in dict.fromkeys(keep_props) if c in out.columns]
 
-    gdf_da = out[["DGUID"] + keep_props + ["geometry"]].copy()
+    gdf_da = out[da_id_cols + keep_props + ["geometry"]].copy()
     if gdf_da.crs is None:
         gdf_da = gdf_da.set_crs(CRS_WGS84)
     else:
