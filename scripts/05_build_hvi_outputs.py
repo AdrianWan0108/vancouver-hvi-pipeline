@@ -2,13 +2,67 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Literal
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from scripts.config import CRS_CANADA_ALBERS, CRS_WGS84, DATA_INTERMEDIATE  # noqa: E402
+
+
+MetricType = Literal["bounded_01", "percent_0_100", "observed", "count"]
+
+DA_REPORT_GROUPS: dict[str, list[tuple[str, MetricType]]] = {
+    "HVI / component indices": [
+        ("hvi_index_n01", "bounded_01"),
+        ("exposure_index", "bounded_01"),
+        ("sensitivity_index", "bounded_01"),
+        ("adaptive_capacity_index", "bounded_01"),
+    ],
+    "Exposure / heat": [
+        ("exposure_mean", "observed"),
+    ],
+    "Social / sensitivity": [
+        ("unemployment_rate", "percent_0_100"),
+        ("low_income_rate", "percent_0_100"),
+        ("pct_seniors_65plus", "percent_0_100"),
+        ("pct_living_alone", "percent_0_100"),
+    ],
+    "Housing": [
+        ("pct_renter", "percent_0_100"),
+        ("pct_core_need", "percent_0_100"),
+        ("pct_major_repairs", "percent_0_100"),
+    ],
+    "Adaptive / green": [
+        ("green_frac", "bounded_01"),
+        ("frac_coniferous", "bounded_01"),
+        ("frac_deciduous", "bounded_01"),
+        ("frac_shrub", "bounded_01"),
+    ],
+    "Built surface": [
+        ("frac_buildings", "bounded_01"),
+        ("frac_other_built", "bounded_01"),
+        ("frac_paved", "bounded_01"),
+        ("hardscape_frac", "bounded_01"),
+    ],
+    "Context / population": [
+        ("pop_total", "count"),
+    ],
+}
+
+REGION_REPORT_GROUPS: dict[str, list[tuple[str, MetricType]]] = {
+    "Region HVI": [
+        ("region_hvi_raw_pw", "bounded_01"),
+        ("region_hvi_n01", "bounded_01"),
+    ],
+    "Region context": [
+        ("region_pop_total", "count"),
+        ("da_count_used", "count"),
+    ],
+}
 
 
 def print_bbox(gdf: gpd.GeoDataFrame, label: str) -> None:
@@ -26,6 +80,130 @@ def normalize_01(s: pd.Series) -> pd.Series:
     if pd.isna(mn) or pd.isna(mx) or mx == mn:
         return pd.Series([pd.NA] * len(s), index=s.index, dtype="Float64")
     return (s - mn) / (mx - mn)
+
+
+def format_stat(value: float | int | None) -> str:
+    if value is None or pd.isna(value):
+        return "NA"
+    return f"{float(value):.6f}"
+
+
+def pct_close_to(series: pd.Series, target: float) -> float | None:
+    valid = pd.to_numeric(series, errors="coerce").dropna()
+    if len(valid) == 0:
+        return None
+    return float(np.isclose(valid.to_numpy(), target, rtol=1e-9, atol=1e-9).mean() * 100.0)
+
+
+def suggest_display_domain_hint(stats: dict[str, float | int | None], metric_type: MetricType) -> str:
+    p95 = stats.get("p95")
+    p99 = stats.get("p99")
+    mx = stats.get("max")
+    pct_exactly_100 = stats.get("pct_exactly_100")
+
+    if metric_type == "bounded_01":
+        return "likely fixed 0-1"
+
+    if metric_type == "percent_0_100":
+        if (
+            (p99 is not None and not pd.isna(p99) and float(p99) >= 95)
+            or (pct_exactly_100 is not None and not pd.isna(pct_exactly_100) and float(pct_exactly_100) > 0)
+        ):
+            return "likely fixed 0-100"
+        return "consider clipped percentile range or observed max for stronger contrast"
+
+    if metric_type in {"observed", "count"}:
+        if (
+            p95 is not None
+            and p99 is not None
+            and mx is not None
+            and not pd.isna(p95)
+            and not pd.isna(p99)
+            and not pd.isna(mx)
+            and (float(p99) > float(p95) * 1.25 or float(mx) > float(p99) * 1.25)
+        ):
+            return "consider 1-99 or 5-95 clip"
+        return "likely observed min/max"
+
+    return "review manually"
+
+
+def summarize_metric(series: pd.Series, metric_type: MetricType) -> dict[str, float | int | None]:
+    s = pd.to_numeric(series, errors="coerce")
+    valid = s.dropna()
+    total_count = int(len(s))
+    count = int(valid.shape[0])
+    missing_count = total_count - count
+    missing_pct = float((missing_count / total_count) * 100.0) if total_count else None
+
+    stats: dict[str, float | int | None] = {
+        "count": count,
+        "missing_count": missing_count,
+        "missing_pct": missing_pct,
+        "unique_count": int(valid.nunique(dropna=True)),
+        "mean": float(valid.mean()) if count else None,
+        "std": float(valid.std()) if count else None,
+        "min": float(valid.min()) if count else None,
+        "p01": float(valid.quantile(0.01)) if count else None,
+        "p05": float(valid.quantile(0.05)) if count else None,
+        "p25": float(valid.quantile(0.25)) if count else None,
+        "p50": float(valid.quantile(0.50)) if count else None,
+        "p75": float(valid.quantile(0.75)) if count else None,
+        "p95": float(valid.quantile(0.95)) if count else None,
+        "p99": float(valid.quantile(0.99)) if count else None,
+        "max": float(valid.max()) if count else None,
+        "pct_exactly_0": pct_close_to(valid, 0.0),
+    }
+
+    if metric_type == "bounded_01":
+        stats["pct_exactly_1"] = pct_close_to(valid, 1.0)
+    if metric_type == "percent_0_100":
+        stats["pct_exactly_100"] = pct_close_to(valid, 100.0)
+
+    return stats
+
+
+def write_metric_block(
+    f,
+    df: pd.DataFrame,
+    metric_name: str,
+    metric_type: MetricType,
+    group_label: str,
+) -> None:
+    if metric_name not in df.columns:
+        f.write(f"\n{metric_name}\n")
+        f.write(f"group: {group_label}\n")
+        f.write(f"metric_type: {metric_type}\n")
+        f.write("status: missing from dataframe\n")
+        return
+
+    stats = summarize_metric(df[metric_name], metric_type)
+    hint = suggest_display_domain_hint(stats, metric_type)
+
+    f.write(f"\n{metric_name}\n")
+    f.write(f"group: {group_label}\n")
+    f.write(f"metric_type: {metric_type}\n")
+    f.write(f"suggested_display_domain_hint: {hint}\n")
+    f.write(f"count: {int(stats['count'])}\n")
+    f.write(f"missing_count: {int(stats['missing_count'])}\n")
+    f.write(f"missing_pct: {format_stat(stats['missing_pct'])}\n")
+    f.write(f"unique_count: {int(stats['unique_count'])}\n")
+    f.write(f"mean: {format_stat(stats['mean'])}\n")
+    f.write(f"std: {format_stat(stats['std'])}\n")
+    f.write(f"min: {format_stat(stats['min'])}\n")
+    f.write(f"p01: {format_stat(stats['p01'])}\n")
+    f.write(f"p05: {format_stat(stats['p05'])}\n")
+    f.write(f"p25: {format_stat(stats['p25'])}\n")
+    f.write(f"p50: {format_stat(stats['p50'])}\n")
+    f.write(f"p75: {format_stat(stats['p75'])}\n")
+    f.write(f"p95: {format_stat(stats['p95'])}\n")
+    f.write(f"p99: {format_stat(stats['p99'])}\n")
+    f.write(f"max: {format_stat(stats['max'])}\n")
+    f.write(f"pct_exactly_0: {format_stat(stats['pct_exactly_0'])}\n")
+    if metric_type == "bounded_01":
+        f.write(f"pct_exactly_1: {format_stat(stats.get('pct_exactly_1'))}\n")
+    if metric_type == "percent_0_100":
+        f.write(f"pct_exactly_100: {format_stat(stats.get('pct_exactly_100'))}\n")
 
 
 def main() -> int:
@@ -355,6 +533,20 @@ def main() -> int:
         f.write(str(pd.to_numeric(da_complete["hvi_raw"], errors="coerce").describe()) + "\n\n")
         f.write("Region region_hvi_raw_pw summary:\n")
         f.write(str(pd.to_numeric(region_stats["region_hvi_raw_pw"], errors="coerce").describe()) + "\n\n")
+
+        f.write("Frontend DA metric distributions\n")
+        f.write("=" * 80 + "\n")
+        for group_label, metrics in DA_REPORT_GROUPS.items():
+            f.write(f"\n[{group_label}]\n")
+            for metric_name, metric_type in metrics:
+                write_metric_block(f, out_table, metric_name, metric_type, group_label)
+
+        f.write("\nFrontend region metric distributions\n")
+        f.write("=" * 80 + "\n")
+        for group_label, metrics in REGION_REPORT_GROUPS.items():
+            f.write(f"\n[{group_label}]\n")
+            for metric_name, metric_type in metrics:
+                write_metric_block(f, region_stats, metric_name, metric_type, group_label)
 
     print("Wrote:", report)
     print("Done.")
