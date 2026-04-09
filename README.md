@@ -223,5 +223,6 @@ npx pmtiles convert outputs/hvi_regions.mbtiles outputs/hvi_regions.pmtiles
 ## Notes
 
 - Raw inputs are local and are not included in version control.
+- Generated artefacts are written to `outputs/` and submitted separately as `outputs.zip`.
 - The pipeline is designed to be rerun script-by-script as methods or inputs change.
 - Debug reports in `outputs/` are the first place to check when validating stage outputs.

@@ -25,7 +25,7 @@ def pick_da_key(gdf: gpd.GeoDataFrame) -> str:
         "Could not find a preferred DA join key column.\n"
         f"Looked for: {PREFERRED_DA_KEYS}\n"
         f"Available columns: {sorted(list(cols))}\n"
-        "Update PREFERRED_DA_KEYS in scripts/00_config.py accordingly."
+        "Update PREFERRED_DA_KEYS in scripts/config.py accordingly."
     )
 
 

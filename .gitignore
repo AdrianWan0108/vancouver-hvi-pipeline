@@ -4,7 +4,8 @@ __pycache__/
 
 data_raw/
 outputs/
-data_out/
+outputs.zip
+.vscode/
 
 .env
 .DS_Store

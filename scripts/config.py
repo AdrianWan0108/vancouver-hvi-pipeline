@@ -1,4 +1,4 @@
-# scripts/00_config.py
+# scripts/config.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,7 +9,7 @@ from typing import Optional
 # Project paths
 # -------------------------
 
-# This assumes scripts/00_config.py lives under <repo_root>/scripts/
+# This assumes scripts/config.py lives under <repo_root>/scripts/
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 DATA_RAW = REPO_ROOT / "data_raw"
