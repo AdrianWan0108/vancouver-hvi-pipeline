@@ -13,7 +13,7 @@ The pipeline produces:
 ```text
 scripts/            Pipeline scripts
 data_raw/           Local raw inputs (not versioned)
-data_intermediate/  Intermediate and final pipeline outputs
+outputs/            Intermediate and final pipeline outputs
 notebooks/          Ad hoc exploration
 environment.yml     Conda environment definition
 package.json        Node dependency for PMTiles conversion
@@ -81,49 +81,49 @@ Shared configuration for paths, CRS settings, constants, and output file locatio
 Prepares the Metro Vancouver DA base layer from the source DA boundaries.
 
 Outputs:
-- `data_intermediate/da.gpkg`
-- `data_intermediate/da_preview.geojson`
+- `outputs/da.gpkg`
+- `outputs/da_preview.geojson`
 
 ### `scripts/02_landcover_housing_capacity.py`
 Processes landcover and housing-related inputs, computes landcover fractions, and builds adaptive-capacity inputs.
 
 Outputs:
-- `data_intermediate/landcover_housing_capacity.csv`
-- `data_intermediate/02_landcover_housing_capacity_debug_report.txt`
+- `outputs/landcover_housing_capacity.csv`
+- `outputs/02_landcover_housing_capacity_debug_report.txt`
 
 ### `scripts/03_census_social.py`
 Processes DA-level census social indicators and computes the sensitivity component.
 
 Outputs:
-- `data_intermediate/census_sensitivity.csv`
-- `data_intermediate/census_social_selected_long.csv`
-- `data_intermediate/03_census_social_debug_report.txt`
+- `outputs/census_sensitivity.csv`
+- `outputs/census_social_selected_long.csv`
+- `outputs/03_census_social_debug_report.txt`
 
 ### `scripts/04_canue_exposure.py`
 Processes CANUE land surface temperature inputs, joins them to DAs, and computes the exposure component.
 
 Outputs:
-- `data_intermediate/canue_exposure.csv`
-- `data_intermediate/canue_exposure_points_preview.geojson`
-- `data_intermediate/04_canue_exposure_debug_report.txt`
+- `outputs/canue_exposure.csv`
+- `outputs/canue_exposure_points_preview.geojson`
+- `outputs/04_canue_exposure_debug_report.txt`
 
 ### `scripts/05_build_hvi_outputs.py`
 Joins the three components, computes the production HVI, builds region-level outputs, and writes the main final files.
 
 Outputs:
-- `data_intermediate/hvi_da_components.csv`
-- `data_intermediate/hvi_da.geojson`
-- `data_intermediate/hvi_regions_components.csv`
-- `data_intermediate/hvi_regions.geojson`
-- `data_intermediate/05_build_hvi_outputs_debug_report.txt`
+- `outputs/hvi_da_components.csv`
+- `outputs/hvi_da.geojson`
+- `outputs/hvi_regions_components.csv`
+- `outputs/hvi_regions.geojson`
+- `outputs/05_build_hvi_outputs_debug_report.txt`
 
 ### `scripts/06_formula_review.py`
 Compares candidate HVI formulas using the current normalized component outputs.
 
 Outputs:
-- `data_intermediate/hvi_formula_comparison_da.csv`
-- `data_intermediate/hvi_formula_comparison_regions.csv`
-- `data_intermediate/06_formula_review_report.txt`
+- `outputs/hvi_formula_comparison_da.csv`
+- `outputs/hvi_formula_comparison_regions.csv`
+- `outputs/06_formula_review_report.txt`
 
 ## Production HVI Implementation
 
@@ -178,7 +178,7 @@ These fields are used by later stages.
 
 ## Main Outputs
 
-The main production outputs written to `data_intermediate/` are:
+The main production outputs written to `outputs/` are:
 
 - `hvi_da.geojson`
 - `hvi_regions.geojson`
@@ -200,28 +200,28 @@ If you want tiles for the frontend, convert the final GeoJSON files after runnin
 Example:
 
 ```bash
-tippecanoe -o data_intermediate/hvi_da.mbtiles \
+tippecanoe -o outputs/hvi_da.mbtiles \
   -l hvi_da \
   -zg \
   --read-parallel \
   --drop-densest-as-needed \
   --extend-zooms-if-still-dropping \
-  data_intermediate/hvi_da.geojson
+  outputs/hvi_da.geojson
 
-tippecanoe -o data_intermediate/hvi_regions.mbtiles \
+tippecanoe -o outputs/hvi_regions.mbtiles \
   -l hvi_regions \
   -zg \
   --read-parallel \
   --drop-densest-as-needed \
   --extend-zooms-if-still-dropping \
-  data_intermediate/hvi_regions.geojson
+  outputs/hvi_regions.geojson
 
-npx pmtiles convert data_intermediate/hvi_da.mbtiles data_intermediate/hvi_da.pmtiles
-npx pmtiles convert data_intermediate/hvi_regions.mbtiles data_intermediate/hvi_regions.pmtiles
+npx pmtiles convert outputs/hvi_da.mbtiles outputs/hvi_da.pmtiles
+npx pmtiles convert outputs/hvi_regions.mbtiles outputs/hvi_regions.pmtiles
 ```
 
 ## Notes
 
 - Raw inputs are local and are not included in version control.
 - The pipeline is designed to be rerun script-by-script as methods or inputs change.
-- Debug reports in `data_intermediate/` are the first place to check when validating stage outputs.
+- Debug reports in `outputs/` are the first place to check when validating stage outputs.

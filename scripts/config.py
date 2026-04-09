@@ -13,17 +13,15 @@ from typing import Optional
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 DATA_RAW = REPO_ROOT / "data_raw"
-DATA_INTERMEDIATE = REPO_ROOT / "data_intermediate"
-DATA_OUT = REPO_ROOT / "data_out"
+OUTPUTS_DIR = REPO_ROOT / "outputs"
 
 DA_DIR = DATA_RAW / "da_boundaries"
 CENSUS_DIR = DATA_RAW / "census_profile"
 CANUE_DIR = DATA_RAW / "canue_lst"
 LANDCOVER_DIR = DATA_RAW / "landcover"
 
-# Ensure output folders exist (safe even if already present)
-DATA_INTERMEDIATE.mkdir(parents=True, exist_ok=True)
-DATA_OUT.mkdir(parents=True, exist_ok=True)
+# Ensure output folder exists (safe even if already present)
+OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # -------------------------
 # Locked design decisions

@@ -9,7 +9,7 @@ import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from scripts.config import DATA_INTERMEDIATE, get_inputs  # noqa: E402
+from scripts.config import OUTPUTS_DIR, get_inputs  # noqa: E402
 
 
 def to_num(s: pd.Series) -> pd.Series:
@@ -47,8 +47,8 @@ AGE_IDS_WE_CARE: Set[str] = set(AGE_CHARACTERISTIC_ID_TO_KEY.keys())
 def main() -> int:
     ins = get_inputs()
 
-    da_gpkg = DATA_INTERMEDIATE / "da.gpkg"
-    capacity_csv = DATA_INTERMEDIATE / "landcover_housing_capacity.csv"
+    da_gpkg = OUTPUTS_DIR / "da.gpkg"
+    capacity_csv = OUTPUTS_DIR / "landcover_housing_capacity.csv"
     if not da_gpkg.exists():
         print(f"ERROR: Missing {da_gpkg}. Run scripts/01_prepare_da.py first.")
         return 1
@@ -181,7 +181,7 @@ def main() -> int:
         "C1_COUNT_TOTAL",
     ] = pd.NA
 
-    out_long = DATA_INTERMEDIATE / "census_social_selected_long.csv"
+    out_long = OUTPUTS_DIR / "census_social_selected_long.csv"
     df.to_csv(out_long, index=False)
     print("Wrote:", out_long)
 
@@ -250,11 +250,11 @@ def main() -> int:
     wide["sensitivity_index"] = wide[final_component_cols].mean(axis=1, skipna=True)
     wide["sensitivity_index_75plus_comparison"] = wide[comparison_component_cols].mean(axis=1, skipna=True)
 
-    out_csv = DATA_INTERMEDIATE / "census_sensitivity.csv"
+    out_csv = OUTPUTS_DIR / "census_sensitivity.csv"
     wide.reset_index().to_csv(out_csv, index=False)
     print("Wrote:", out_csv)
 
-    report_path = DATA_INTERMEDIATE / "03_census_social_debug_report.txt"
+    report_path = OUTPUTS_DIR / "03_census_social_debug_report.txt"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("03_census_social debug report\n")
         f.write(f"Census CSV: {census_csv}\n")

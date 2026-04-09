@@ -10,7 +10,7 @@ import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from scripts.config import CRS_CANADA_ALBERS, DATA_INTERMEDIATE  # noqa: E402
+from scripts.config import CRS_CANADA_ALBERS, OUTPUTS_DIR  # noqa: E402
 
 
 TOP_DA_SHARE = 0.10
@@ -152,8 +152,8 @@ def choose_recommendation(
 
 
 def main() -> int:
-    comp_csv = DATA_INTERMEDIATE / "hvi_da_components.csv"
-    da_gpkg = DATA_INTERMEDIATE / "da.gpkg"
+    comp_csv = OUTPUTS_DIR / "hvi_da_components.csv"
+    da_gpkg = OUTPUTS_DIR / "da.gpkg"
 
     if not comp_csv.exists():
         print(f"ERROR: Missing {comp_csv}. Run scripts/05_build_hvi_outputs.py first.")
@@ -219,7 +219,7 @@ def main() -> int:
         da_out_cols.extend([f"{name}_raw", f"{name}_n01"])
     da_out = compare_df[da_out_cols].copy()
 
-    da_out_csv = DATA_INTERMEDIATE / "hvi_formula_comparison_da.csv"
+    da_out_csv = OUTPUTS_DIR / "hvi_formula_comparison_da.csv"
     da_out.to_csv(da_out_csv, index=False)
     print("Wrote:", da_out_csv)
 
@@ -305,7 +305,7 @@ def main() -> int:
     weighted_sum_cols = [f"{name}_weighted_sum" for name in formula_names]
     region_stats = region_stats.drop(columns=weighted_sum_cols)
 
-    region_out_csv = DATA_INTERMEDIATE / "hvi_formula_comparison_regions.csv"
+    region_out_csv = OUTPUTS_DIR / "hvi_formula_comparison_regions.csv"
     region_stats.to_csv(region_out_csv, index=False)
     print("Wrote:", region_out_csv)
 
@@ -325,7 +325,7 @@ def main() -> int:
         formula_summary=formula_summary,
     )
 
-    report_path = DATA_INTERMEDIATE / "06_formula_review_report.txt"
+    report_path = OUTPUTS_DIR / "06_formula_review_report.txt"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("06_formula_review report\n\n")
         f.write(f"DA components input: {comp_csv}\n")

@@ -16,7 +16,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from scripts.config import (  # noqa: E402
     CRS_CANADA_ALBERS,
     CRS_WGS84,
-    DATA_INTERMEDIATE,
+    OUTPUTS_DIR,
     EXPOSURE_FIELD,
     get_inputs,
 )
@@ -40,8 +40,8 @@ def clean_postalcode(s: pd.Series) -> pd.Series:
 def main() -> int:
     ins = get_inputs()
 
-    da_gpkg = DATA_INTERMEDIATE / "da.gpkg"
-    capacity_csv = DATA_INTERMEDIATE / "landcover_housing_capacity.csv"
+    da_gpkg = OUTPUTS_DIR / "da.gpkg"
+    capacity_csv = OUTPUTS_DIR / "landcover_housing_capacity.csv"
     if not da_gpkg.exists():
         print(f"ERROR: Missing {da_gpkg}. Run scripts/01_prepare_da.py first.")
         return 1
@@ -188,11 +188,11 @@ def main() -> int:
         + (EXPOSURE_HARDSCAPE_WEIGHT * pd.to_numeric(agg["hardscape_frac_n01"], errors="coerce"))
     )
 
-    out_csv = DATA_INTERMEDIATE / "canue_exposure.csv"
+    out_csv = OUTPUTS_DIR / "canue_exposure.csv"
     agg.to_csv(out_csv, index=False)
     print("Wrote:", out_csv)
 
-    out_pts = DATA_INTERMEDIATE / "canue_exposure_points_preview.geojson"
+    out_pts = OUTPUTS_DIR / "canue_exposure_points_preview.geojson"
     try:
         pts_wgs = pts.to_crs("EPSG:4326")
         pts_wgs.to_file(out_pts, driver="GeoJSON")
@@ -200,7 +200,7 @@ def main() -> int:
     except Exception as e:
         print("NOTE: could not write point preview geojson:", repr(e))
 
-    report = DATA_INTERMEDIATE / "04_canue_exposure_debug_report.txt"
+    report = OUTPUTS_DIR / "04_canue_exposure_debug_report.txt"
     with open(report, "w", encoding="utf-8") as f:
         f.write("04_canue_exposure debug report\n")
         f.write(f"Landcover/capacity input: {capacity_csv}\n")

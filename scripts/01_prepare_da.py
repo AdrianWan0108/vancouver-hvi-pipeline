@@ -9,7 +9,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))  # Add project root to
 
 from scripts.config import (
     CRS_CANADA_ALBERS,
-    DATA_INTERMEDIATE,
+    OUTPUTS_DIR,
     PREFERRED_DA_KEYS,
     get_inputs,
 )
@@ -179,7 +179,7 @@ def main() -> int:
     # ---------------------------
     # 4) Write outputs
     # ---------------------------
-    out_gpkg = DATA_INTERMEDIATE / "da.gpkg"
+    out_gpkg = OUTPUTS_DIR / "da.gpkg"
 
     print("Writing filtered DA layer to:", out_gpkg, "layer: da")
     da_metro.to_file(out_gpkg, layer="da", driver="GPKG")
@@ -191,7 +191,7 @@ def main() -> int:
     metro_union.to_file(out_gpkg, layer="metro_union", driver="GPKG")
 
     # Preview GeoJSON (WGS84)
-    out_preview_geojson = DATA_INTERMEDIATE / "da_preview.geojson"
+    out_preview_geojson = OUTPUTS_DIR / "da_preview.geojson"
     try:
         da_wgs84 = da_metro.to_crs("EPSG:4326")
         print("Writing preview:", out_preview_geojson)

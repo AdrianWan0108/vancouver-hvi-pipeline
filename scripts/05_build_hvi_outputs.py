@@ -10,7 +10,7 @@ import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from scripts.config import CRS_CANADA_ALBERS, CRS_WGS84, DATA_INTERMEDIATE  # noqa: E402
+from scripts.config import CRS_CANADA_ALBERS, CRS_WGS84, OUTPUTS_DIR  # noqa: E402
 
 
 MetricType = Literal["bounded_01", "percent_0_100", "observed", "count"]
@@ -207,10 +207,10 @@ def write_metric_block(
 
 
 def main() -> int:
-    da_gpkg = DATA_INTERMEDIATE / "da.gpkg"
-    sens_csv = DATA_INTERMEDIATE / "census_sensitivity.csv"
-    capacity_csv = DATA_INTERMEDIATE / "landcover_housing_capacity.csv"
-    expo_csv = DATA_INTERMEDIATE / "canue_exposure.csv"
+    da_gpkg = OUTPUTS_DIR / "da.gpkg"
+    sens_csv = OUTPUTS_DIR / "census_sensitivity.csv"
+    capacity_csv = OUTPUTS_DIR / "landcover_housing_capacity.csv"
+    expo_csv = OUTPUTS_DIR / "canue_exposure.csv"
 
     if not da_gpkg.exists():
         print(f"ERROR: Missing {da_gpkg}. Run 01_prepare_da.py first.")
@@ -375,7 +375,7 @@ def main() -> int:
         out.loc[complete_mask, "hvi_index_n01"] = out.loc[complete_mask, "hvi_raw"]
 
     out_table = out.drop(columns=["geometry"]).copy()
-    out_csv = DATA_INTERMEDIATE / "hvi_da_components.csv"
+    out_csv = OUTPUTS_DIR / "hvi_da_components.csv"
     out_table.to_csv(out_csv, index=False)
     print("Wrote:", out_csv)
 
@@ -432,7 +432,7 @@ def main() -> int:
         if col in gdf_da.columns:
             gdf_da[col] = pd.to_numeric(gdf_da[col], errors="coerce")
 
-    out_geojson_da = DATA_INTERMEDIATE / "hvi_da.geojson"
+    out_geojson_da = OUTPUTS_DIR / "hvi_da.geojson"
     gdf_da.to_file(out_geojson_da, driver="GeoJSON")
     print("Wrote:", out_geojson_da)
 
@@ -498,15 +498,15 @@ def main() -> int:
     region_geom = region_geom.to_crs(CRS_WGS84)
     region_geom["geometry"] = region_geom["geometry"].simplify(tolerance=0.0005, preserve_topology=True)
 
-    out_region_csv = DATA_INTERMEDIATE / "hvi_regions_components.csv"
+    out_region_csv = OUTPUTS_DIR / "hvi_regions_components.csv"
     region_stats.to_csv(out_region_csv, index=False)
     print("Wrote:", out_region_csv)
 
-    out_region_geojson = DATA_INTERMEDIATE / "hvi_regions.geojson"
+    out_region_geojson = OUTPUTS_DIR / "hvi_regions.geojson"
     region_geom.to_file(out_region_geojson, driver="GeoJSON")
     print("Wrote:", out_region_geojson)
 
-    report = DATA_INTERMEDIATE / "05_build_hvi_outputs_debug_report.txt"
+    report = OUTPUTS_DIR / "05_build_hvi_outputs_debug_report.txt"
     with open(report, "w", encoding="utf-8") as f:
         f.write("05_build_hvi_outputs debug report\n\n")
         f.write("Production HVI formula: (E + S + (1 - A)) / 3\n")

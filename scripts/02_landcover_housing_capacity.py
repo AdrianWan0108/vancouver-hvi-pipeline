@@ -7,7 +7,7 @@ import geopandas as gpd
 import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from scripts.config import DATA_INTERMEDIATE, get_inputs  # noqa: E402
+from scripts.config import OUTPUTS_DIR, get_inputs  # noqa: E402
 
 
 HARDSCAPE_CLASSES = {1, 2, 3}
@@ -111,7 +111,7 @@ def load_census_capacity_inputs(census_csv: Path, valid_dguids: set[str]) -> pd.
 def main() -> int:
     ins = get_inputs()
 
-    da_gpkg = DATA_INTERMEDIATE / "da.gpkg"
+    da_gpkg = OUTPUTS_DIR / "da.gpkg"
     if not da_gpkg.exists():
         print(f"ERROR: Missing {da_gpkg}. Run scripts/01_prepare_da.py first.")
         return 1
@@ -283,11 +283,11 @@ def main() -> int:
         ],
     ] = pd.NA
 
-    out_csv = DATA_INTERMEDIATE / "landcover_housing_capacity.csv"
+    out_csv = OUTPUTS_DIR / "landcover_housing_capacity.csv"
     out.to_csv(out_csv, index=False)
     print("Wrote:", out_csv)
 
-    report_path = DATA_INTERMEDIATE / "02_landcover_housing_capacity_debug_report.txt"
+    report_path = OUTPUTS_DIR / "02_landcover_housing_capacity_debug_report.txt"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("02_landcover_housing_capacity debug report\n")
         f.write(f"Landcover raster: {land_tif}\n")
